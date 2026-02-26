@@ -12,7 +12,6 @@
     <title>FixIT</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
@@ -27,6 +26,7 @@
         .marker-pin { transition: transform 0.1s ease; z-index: 60; }
         .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
         
+        /* Layout Mappa e PDF */
         .map-viewport { 
             display: flex; 
             width: 100%; 
@@ -45,12 +45,12 @@
         }
         iframe, embed { pointer-events: none; border: none; }
 
+        /* Stili Stampa PDF */
         @media print {
             body { background: white !important; overflow: visible !important; padding: 0 !important; }
             #app-ui { display: none !important; }
             #report-print-view { display: block !important; }
             .no-print { display: none !important; }
-            .page-break { page-break-after: always; }
         }
         #report-print-view { display: none; background: white; min-height: 100vh; color: black; }
     </style>
@@ -59,37 +59,43 @@
     <div id="app" class="h-screen flex flex-col"></div>
 
     <script>
+        // --- DATABASE INDEXEDDB ---
         let db;
         const initDB = () => {
             return new Promise((resolve) => {
-                const request = indexedDB.open("FixIT_Final_Storage", 7);
+                const request = indexedDB.open("FixIT_Storage_v11", 1);
                 request.onupgradeneeded = (e) => {
                     const db = e.target.result;
                     if (!db.objectStoreNames.contains("blobs")) db.createObjectStore("blobs");
                 };
                 request.onsuccess = (e) => { db = e.target.result; resolve(); };
+                request.onerror = () => resolve();
             });
         };
 
         const dbSave = (id, data) => new Promise(res => {
+            if(!db) return res();
             const tx = db.transaction("blobs", "readwrite");
             tx.objectStore("blobs").put(data, id);
             tx.oncomplete = res;
         });
 
         const dbGet = (id) => new Promise(res => {
+            if(!db) return res(null);
             const tx = db.transaction("blobs", "readonly");
             const req = tx.objectStore("blobs").get(id);
             req.onsuccess = () => res(req.result);
             req.onerror = () => res(null);
         });
 
+        // --- TRADUZIONI ---
         const i18n = {
             it: { projects: "I Miei Progetti", newProj: "Nuovo Progetto", create: "Crea", cancel: "Annulla", docs: "Piani", add: "Aggiungi", noDocs: "Carica un PDF", report: "Genera PDF", details: "Dettaglio", title: "Titolo", notes: "Note", crit: "CRITICO", pend: "PENDENTE", ok: "RISOLTO", cam: "Camera", gal: "Galleria", save: "Chiudi", del: "Elimina", repTitle: "RAPPORTO REVISIONE OPERA", rename: "Rinomina Piano", element: "ELEMENTO", loc: "UBICAZIONE", date: "Data", proj: "Progetto" },
             es: { projects: "Mis Proyectos", newProj: "Nuevo Proyecto", create: "Crear", cancel: "Cancelar", docs: "Planos", add: "Añadir", noDocs: "Sin planos", report: "Generar PDF", details: "Detalle", title: "Título", notes: "Notas", crit: "CRÍTICO", pend: "PENDIENTE", ok: "RESUELTO", cam: "Cámara", gal: "Galería", save: "Cerrar", del: "Eliminar", repTitle: "INFORME REVISIÓN DE OBRA", rename: "Renombrar", element: "ELEMENTO", loc: "UBICACIÓN", date: "Fecha", proj: "Proyecto" },
             ca: { projects: "Projectes", newProj: "Nou Projecte", create: "Crear", cancel: "Cancel·lar", docs: "Plànols", add: "Afegir", noDocs: "Cap plànol", report: "Generar PDF", details: "Detall", title: "Títol", notes: "Notes", crit: "CRÍTIC", pend: "PENDENT", ok: "RESOLT", cam: "Càmera", gal: "Galeria", save: "Desar", del: "Eliminar", repTitle: "INFORME REVISIÓ D'OBRA", rename: "Canviar nom", element: "ELEMENT", loc: "UBICACIÓ", date: "Data", proj: "Projecte" }
         };
 
+        // --- STATO ---
         window.state = {
             lang: localStorage.getItem('fixit_lang') || 'it',
             projects: JSON.parse(localStorage.getItem('fixit_projs')) || [],
@@ -108,6 +114,7 @@
             await render();
         };
 
+        // --- AZIONI ---
         window.openProject = (id) => updateState({ activeProjectId: id.toString(), activeFileId: null, zoom: 1 });
 
         window.handleNewProject = () => {
@@ -159,9 +166,10 @@
             const m = p.markers.find(x => x.id === mid);
             const photos = await Promise.all(m.photos.map(async (pid) => {
                 const buf = await dbGet(pid);
+                if(!buf) return null;
                 return { id: pid, url: URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })) };
             }));
-            updateState({ showModal: { type: 'marker-detail', id: mid }, modalPhotos: photos });
+            updateState({ showModal: { type: 'marker-detail', id: mid }, modalPhotos: photos.filter(x=>x) });
         };
 
         window.updateMarkerStatus = (mid, status) => {
@@ -195,6 +203,7 @@
             reader.readAsArrayBuffer(file);
         };
 
+        // --- RENDERING ---
         const render = async () => {
             const root = document.getElementById('app');
             const t = i18n[window.state.lang];
@@ -211,7 +220,7 @@
 
         const renderHome = (t) => `
             <div id="app-ui" class="h-full flex flex-col">
-                <header class="bg-slate-900 text-white p-6 flex justify-between items-center shadow-2xl shrink-0 pt-12">
+                <header class="bg-slate-900 text-white p-6 flex justify-between items-center shadow-2xl shrink-0 pt-10">
                     <h1 class="text-3xl font-black italic tracking-tighter">FixIT</h1>
                     <div class="flex gap-3">
                         <select onchange="updateState({lang:this.value})" class="bg-white/10 text-[10px] font-black p-2 rounded-xl border-none outline-none uppercase tracking-widest">
@@ -220,7 +229,7 @@
                         <button onclick="updateState({showModal:'new-project'})" class="bg-blue-600 p-2 rounded-xl active:scale-90 transition-transform"><i data-lucide="plus"></i></button>
                     </div>
                 </header>
-                <div class="flex-1 p-6 space-y-4 overflow-y-auto scrollbar-hide pb-20">
+                <div class="flex-1 p-6 space-y-4 overflow-y-auto scrollbar-hide">
                     ${window.state.projects.map(p => `
                         <div onclick="window.openProject('${p.id}')" class="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm flex justify-between items-center active:scale-95 transition-all cursor-pointer">
                             <div><h3 class="font-black text-lg uppercase tracking-tight">${p.name}</h3><p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${p.files.length} ${t.docs} • ${p.markers.length} PUNTI</p></div>
@@ -308,6 +317,7 @@
                 const fName = p.files.find(f => f.id === m.fileId)?.name || "Visual";
                 const photosHtml = await Promise.all(m.photos.map(async (pid) => {
                     const buf = await dbGet(pid);
+                    if(!buf) return '';
                     const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
                     return <img src="${url}" style="width:100%; border:1px solid black; margin-bottom:5px;">;
                 }));
@@ -337,8 +347,8 @@
             }
 
             return `
-                <div class="h-full flex flex-col bg-slate-800 overflow-y-auto no-print">
-                    <header class="bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-50 pt-10">
+                <div class="h-full flex flex-col bg-slate-800 overflow-y-auto no-print pt-10">
+                    <header class="bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-50">
                         <button onclick="updateState({view:'app'})" class="font-bold flex items-center gap-2 text-sm uppercase tracking-widest"><i data-lucide="chevron-left"></i> CHIUDI</button>
                         <button onclick="window.print()" class="bg-white text-black px-6 py-2 rounded-full font-black text-xs uppercase shadow-xl active:scale-95 transition-all"><i data-lucide="printer" class="inline w-4 mr-1"></i> SALVA PDF</button>
                     </header>
@@ -362,7 +372,7 @@
                 
                 <div id="report-print-view" class="hidden">
                     <div style="padding:40px;">
-                        <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:8px solid black; padding-bottom:10px; margin-bottom:40px;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom: 8px solid black; padding-bottom: 10px; margin-bottom: 40px;">
                             <div>
                                 <h1 style="font-size:48px; font-weight:900; font-style:italic; margin:0;">TRAM</h1>
                                 <p style="font-size:7px; font-weight:900; letter-spacing:3px; text-transform:uppercase; margin-top:5px;">CONTROL • GESTIÓ • OBRES • PROJECTES</p>
@@ -396,7 +406,9 @@
             }
 
             if (window.state.showModal.type === 'marker-detail') {
-                const m = window.state.projects.find(x=>x.id===window.state.activeProjectId).markers.find(x=>x.id===window.state.showModal.id);
+                const proj = window.state.projects.find(x=>x.id===window.state.activeProjectId);
+                const m = proj.markers.find(x=>x.id===window.state.showModal.id);
+                if (!m) return '';
                 return `
                 <div class="fixed inset-0 bg-black/80 z-[200] flex items-end md:items-center justify-center p-0 md:p-6 backdrop-blur-sm">
                     <div class="bg-white w-full max-w-xl rounded-t-[40px] md:rounded-[40px] overflow-hidden flex flex-col max-h-[92vh] shadow-2xl">
@@ -430,7 +442,10 @@
             return '';
         };
 
-        window.onload = async () => { await initDB(); await render(); };
+        window.onload = async () => { 
+            await initDB(); 
+            await render(); 
+        };
     </script>
 </body>
 </html>
