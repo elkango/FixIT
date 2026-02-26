@@ -4,342 +4,317 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     
-    <!-- PWA Meta per iPhone -->
+    <!-- PWA Apple Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="FixIT">
     
     <title>FixIT</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
-        
-        :root { --pin-size: 10px; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
         body { 
             font-family: 'Inter', sans-serif; 
             -webkit-tap-highlight-color: transparent; 
-            background-color: #f1f5f9; 
-            color: #0f172a;
-            overscroll-behavior: none;
+            background-color: #f1f5f9;
+            margin: 0; padding: 0;
+        }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .marker-pin { transition: transform 0.1s ease; cursor: pointer; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.3); position: absolute; transform: translate(-50%, -50%); z-index: 50; }
+        
+        /* Layout per la Mappa */
+        .map-viewport { width: 100%; height: 100%; overflow: auto; display: flex; justify-content: center; align-items: flex-start; -webkit-overflow-scrolling: touch; background: #cbd5e1; }
+        .map-container { position: relative; background: white; box-shadow: 0 20px 40px rgba(0,0,0,0.2); transform-origin: top center; margin-top: 20px; margin-bottom: 60px; }
+        
+        /* Stampa Report */
+        @media print {
+            #app-ui, .no-print { display: none !important; }
+            #report-view { display: block !important; background: white; }
+            .page-break { page-break-after: always; }
         }
         
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .safe-area-pt { padding-top: env(safe-area-inset-top); }
-        .safe-area-pb { padding-bottom: env(safe-area-inset-bottom); }
-
-        /* Viewport per la mappa: Allineamento in alto per non tagliare il PDF */
-        .map-viewport {
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start; /* Fondamentale per vedere la parte superiore */
-            background-color: #e2e8f0;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .map-container {
-            position: relative;
-            background: white;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.1);
-            transform-origin: top center;
-            margin-top: 20px;
-            margin-bottom: 50px;
-        }
-
-        .marker-pin {
-            position: absolute;
-            width: var(--pin-size);
-            height: var(--pin-size);
-            border-radius: 50%;
-            border: 2px solid white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            transform: translate(-50%, -50%);
-            z-index: 100;
-            pointer-events: auto;
-        }
-
-        iframe, embed { pointer-events: none; width: 100%; height: 100%; border: none; }
-
-        /* Report Print Layout */
-        @media print {
-            #app-ui { display: none !important; }
-            #report-view { display: block !important; background: white !important; }
-            .no-print { display: none !important; }
-        }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
-<body class="overflow-hidden">
-    <div id="app" class="h-screen flex flex-col"></div>
+<body>
+
+    <div id="app" class="h-screen flex flex-col">
+        <!-- Schermata di avvio -->
+        <div class="flex-1 flex flex-col items-center justify-center bg-slate-900 text-white">
+            <div class="loader mb-4"></div>
+            <h1 class="text-3xl font-black italic tracking-tighter">FixIT</h1>
+        </div>
+    </div>
 
     <script>
-        // --- DATABASE LOGIC ---
+        // --- GESTIONE DATABASE INDEXEDDB (Per PDF e Foto) ---
         let db;
-        const initDB = async () => {
+        async function initDB() {
             return new Promise((resolve) => {
-                const request = indexedDB.open("FixIT_Final_DB", 1);
-                request.onupgradeneeded = (e) => {
-                    e.target.result.createObjectStore("blobs");
-                };
-                request.onsuccess = (e) => { db = e.target.result; resolve(); };
+                const request = indexedDB.open("FixIT_DB_v12", 1);
+                request.onupgradeneeded = e => e.target.result.createObjectStore("blobs");
+                request.onsuccess = e => { db = e.target.result; resolve(); };
                 request.onerror = () => resolve();
             });
+        }
+
+        const storage = {
+            save: (id, data) => new Promise(res => {
+                const tx = db.transaction("blobs", "readwrite");
+                tx.objectStore("blobs").put(data, id);
+                tx.oncomplete = res;
+            }),
+            get: (id) => new Promise(res => {
+                const tx = db.transaction("blobs", "readonly");
+                const req = tx.objectStore("blobs").get(id);
+                req.onsuccess = () => res(req.result);
+                req.onerror = () => res(null);
+            })
         };
 
-        const dbSave = (id, data) => new Promise(res => {
-            if(!db) return res();
-            const tx = db.transaction("blobs", "readwrite");
-            tx.objectStore("blobs").put(data, id);
-            tx.oncomplete = res;
-        });
+        // --- TRADUZIONI ---
+        const i18n = {
+            it: { projects: "I Miei Progetti", newProj: "Nuovo Progetto", create: "Crea", cancel: "Annulla", docs: "Piani", add: "Aggiungi", noDocs: "Carica un PDF", report: "Genera PDF", details: "Rilievo", title: "Titolo", notes: "Note", crit: "CRITICO", pend: "PENDENTE", ok: "RISOLTO", cam: "Camera", gal: "Galleria", save: "Chiudi", del: "Elimina", repTitle: "RAPPORTO REVISIONE OPERA", rename: "Rinomina Piano", element: "ELEMENTO", loc: "UBICAZIONE" },
+            es: { projects: "Mis Proyectos", newProj: "Nuevo Proyecto", create: "Crear", cancel: "Cancelar", docs: "Planos", add: "Añadir", noDocs: "Carga un PDF", report: "Generar PDF", details: "Detalle", title: "Título", notes: "Notas", crit: "CRÍTICO", pend: "PENDIENTE", ok: "RESUELTO", cam: "Cámara", gal: "Galería", save: "Cerrar", del: "Eliminar", repTitle: "INFORME REVISIÓN DE OBRA", rename: "Renombrar", element: "ELEMENTO", loc: "UBICACIÓN" },
+            ca: { projects: "Projectes", newProj: "Nou Projecte", create: "Crear", cancel: "Cancel·lar", docs: "Plànols", add: "Afegir", noDocs: "Carrega un PDF", report: "Generar PDF", details: "Detall", title: "Títol", notes: "Notes", crit: "CRÍTIC", pend: "PENDENT", ok: "RESOLT", cam: "Càmera", gal: "Galeria", save: "Desar", del: "Eliminar", repTitle: "INFORME REVISIÓ D'OBRA", rename: "Canviar nom", element: "ELEMENT", loc: "UBICACIÓ" }
+        };
 
-        const dbGet = (id) => new Promise(res => {
-            if(!db) return res(null);
-            const tx = db.transaction("blobs", "readonly");
-            const req = tx.objectStore("blobs").get(id);
-            req.onsuccess = () => res(req.result);
-            req.onerror = () => res(null);
-        });
-
-        // --- STATE ---
-        window.state = {
+        // --- STATO ---
+        let state = {
             lang: localStorage.getItem('fixit_lang') || 'it',
-            projects: JSON.parse(localStorage.getItem('fixit_data')) || [],
+            projects: JSON.parse(localStorage.getItem('fixit_projs')) || [],
             activeProjectId: null,
             activeFileId: null,
             zoom: 1,
-            showModal: null, // 'new-project', 'marker-detail', 'rename-file'
+            showModal: null, 
             view: 'app',
             modalPhotos: []
         };
 
-        const i18n = {
-            it: { projects: "I Miei Progetti", newProj: "Nuovo Progetto", create: "Crea", cancel: "Annulla", docs: "Piani", add: "Aggiungi", noDocs: "Carica un PDF", report: "Genera PDF", details: "Dettaglio", title: "Titolo", notes: "Note", crit: "CRITICO", pend: "PENDENTE", ok: "RISOLTO", cam: "Camera", gal: "Galleria", save: "Chiudi", del: "Elimina", repTitle: "RAPPORTO REVISIONE OPERA", rename: "Rinomina Piano", element: "ELEMENTO", loc: "UBICAZIONE" },
-            es: { projects: "Mis Proyectos", newProj: "Nuevo Proyecto", create: "Crear", cancel: "Cancelar", docs: "Planos", add: "Añadir", noDocs: "Sin planos", report: "Generar PDF", details: "Detalle", title: "Título", notes: "Notas", crit: "CRÍTICO", pend: "PENDIENTE", ok: "RESUELTO", cam: "Cámara", gal: "Galería", save: "Cerrar", del: "Eliminar", repTitle: "INFORME REVISIÓN DE OBRA", rename: "Renombrar", element: "ELEMENTO", loc: "UBICACIÓN" },
-            ca: { projects: "Projectes", newProj: "Nou Projecte", create: "Crear", cancel: "Cancel·lar", docs: "Plànols", add: "Afegir", noDocs: "Cap plànol", report: "Generar PDF", details: "Detall", title: "Títol", notes: "Notes", crit: "CRÍTIC", pend: "PENDENT", ok: "RESOLT", cam: "Càmera", gal: "Galeria", save: "Desar", del: "Eliminar", repTitle: "INFORME REVISIÓ D'OBRA", rename: "Canviar nom", element: "ELEMENT", loc: "UBICACIÓ" }
-        };
-
-        const updateState = async (patch) => {
-            window.state = { ...window.state, ...patch };
-            localStorage.setItem('fixit_data', JSON.stringify(window.state.projects));
-            localStorage.setItem('fixit_lang', window.state.lang);
+        async function updateState(patch) {
+            state = { ...state, ...patch };
+            localStorage.setItem('fixit_projs', JSON.stringify(state.projects));
+            localStorage.setItem('fixit_lang', state.lang);
             render();
+        }
+
+        // --- LOGICA ---
+        window.openProject = (id) => updateState({ activeProjectId: String(id), activeFileId: null, zoom: 1 });
+        
+        window.createProject = () => {
+            const val = document.getElementById('newProjInput')?.value;
+            if(!val) return;
+            const p = { id: String(Date.now()), name: val, files: [], markers: [] };
+            updateState({ projects: [...state.projects, p], showModal: null });
         };
 
-        // --- GLOBAL ACTIONS ---
-        window.changeView = (v) => updateState({ view: v });
-        window.setLang = (l) => updateState({ lang: l });
-        window.openProject = (id) => updateState({ activeProjectId: id, activeFileId: null, zoom: 1 });
-        window.closeProject = () => updateState({ activeProjectId: null, activeFileId: null });
-
-        window.handleCreateProject = () => {
-            const name = document.getElementById('newProjInput')?.value;
-            if (!name) return;
-            const p = { id: Date.now().toString(), name, files: [], markers: [] };
-            updateState({ projects: [...window.state.projects, p], showModal: null });
-        };
-
-        window.handleFileUpload = async (e) => {
+        window.uploadFile = async (e) => {
             const file = e.target.files[0];
-            if (!file) return;
-            const fid = "f_" + Date.now();
+            if(!file) return;
+            const id = "f_" + Date.now();
             const reader = new FileReader();
             reader.onload = async (ev) => {
-                await dbSave(fid, ev.target.result);
-                const projs = [...window.state.projects];
-                const p = projs.find(x => x.id === window.state.activeProjectId);
-                p.files.push({ id: fid, name: file.name.split('.')[0], isPdf: file.type.includes('pdf') });
-                updateState({ projects: projs, activeFileId: fid });
+                await storage.save(id, ev.target.result);
+                const projs = [...state.projects];
+                const p = projs.find(x => x.id === state.activeProjectId);
+                p.files.push({ id, name: file.name.split('.')[0], isPdf: file.type.includes('pdf') });
+                updateState({ projects: projs, activeFileId: id });
             };
             reader.readAsArrayBuffer(file);
         };
 
-        window.handleRename = () => {
-            const name = document.getElementById('renameInput')?.value;
-            if(!name) return;
-            const projs = [...window.state.projects];
-            const p = projs.find(x => x.id === window.state.activeProjectId);
-            const f = p.files.find(x => x.id === window.state.showModal.fileId);
-            f.name = name;
+        window.renameFile = () => {
+            const val = document.getElementById('renameInput')?.value;
+            if(!val) return;
+            const projs = [...state.projects];
+            const p = projs.find(x => x.id === state.activeProjectId);
+            const f = p.files.find(x => x.id === state.showModal.fileId);
+            f.name = val;
             updateState({ projects: projs, showModal: null });
         };
 
-        window.addMarker = (e) => {
-            if(!window.state.activeFileId) return;
+        window.addPin = (e) => {
+            if(!state.activeFileId) return;
             const rect = e.currentTarget.getBoundingClientRect();
             const x = ((e.clientX - rect.left) / rect.width) * 100;
             const y = ((e.clientY - rect.top) / rect.height) * 100;
-            const projs = [...window.state.projects];
-            const p = projs.find(x => x.id === window.state.activeProjectId);
-            const mid = "m_" + Date.now();
-            p.markers.push({ id: mid, fileId: window.state.activeFileId, x, y, status: 'yellow', title: 'Punto', notes: '', photos: [] });
+            const projs = [...state.projects];
+            const p = projs.find(x => x.id === state.activeProjectId);
+            p.markers.push({ id: String(Date.now()), fileId: state.activeFileId, x, y, status: 'yellow', title: 'Punto', notes: '', photos: [] });
             updateState({ projects: projs });
         };
 
         window.openMarker = async (mid) => {
-            const p = window.state.projects.find(x => x.id === window.state.activeProjectId);
+            const p = state.projects.find(x => x.id === state.activeProjectId);
             const m = p.markers.find(x => x.id === mid);
             const photos = await Promise.all(m.photos.map(async (pid) => {
-                const buf = await dbGet(pid);
-                return { id: pid, url: URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })) };
+                const buf = await storage.get(pid);
+                return buf ? { id: pid, url: URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })) } : null;
             }));
-            updateState({ showModal: { type: 'marker-detail', id: mid }, modalPhotos: photos });
+            updateState({ showModal: { type: 'marker-detail', id: mid }, modalPhotos: photos.filter(x=>x) });
         };
 
-        window.updateStatus = (mid, s) => {
-            const projs = [...window.state.projects];
-            const p = projs.find(x => x.id === window.state.activeProjectId);
-            p.markers.find(x => x.id === mid).status = s;
+        window.setMarkerStatus = (mid, s) => {
+            const projs = [...state.projects];
+            const m = projs.find(x => x.id === state.activeProjectId).markers.find(x => x.id === mid);
+            m.status = s;
             updateState({ projects: projs });
         };
 
-        window.saveTextSilent = (mid, field, val) => {
-            const p = window.state.projects.find(x => x.id === window.state.activeProjectId);
-            p.markers.find(x => x.id === mid)[field] = val;
-            localStorage.setItem('fixit_data', JSON.stringify(window.state.projects));
+        window.setMarkerData = (mid, field, val) => {
+            const m = state.projects.find(x => x.id === state.activeProjectId).markers.find(x => x.id === mid);
+            m[field] = val;
+            localStorage.setItem('fixit_projs', JSON.stringify(state.projects));
         };
 
         window.addPhoto = async (mid, e) => {
             const file = e.target.files[0];
-            if (!file) return;
-            const pid = "img_" + Date.now();
+            if(!file) return;
+            const id = "img_" + Date.now();
             const reader = new FileReader();
             reader.onload = async (ev) => {
-                await dbSave(pid, ev.target.result);
-                const projs = [...window.state.projects];
-                projs.find(x => x.id === window.state.activeProjectId).markers.find(x => x.id === mid).photos.push(pid);
+                await storage.save(id, ev.target.result);
+                const projs = [...state.projects];
+                projs.find(x => x.id === state.activeProjectId).markers.find(x => x.id === mid).photos.push(id);
                 const url = URL.createObjectURL(new Blob([ev.target.result], { type: 'image/jpeg' }));
-                updateState({ projects: projs, modalPhotos: [...window.state.modalPhotos, { id: pid, url }] });
+                updateState({ projects: projs, modalPhotos: [...state.modalPhotos, { id, url }] });
             };
             reader.readAsArrayBuffer(file);
         };
 
-        // --- RENDERING ---
-        const render = async () => {
+        // --- RENDER ---
+        async function render() {
             const root = document.getElementById('app');
-            const t = i18n[window.state.lang];
+            const t = i18n[state.lang];
 
-            if (window.state.view === 'report') {
+            if (state.view === 'report') {
                 root.innerHTML = await renderReport(t);
-            } else if (window.state.activeProjectId) {
+            } else if (state.activeProjectId) {
                 root.innerHTML = await renderProject(t);
             } else {
                 root.innerHTML = renderHome(t);
             }
-            lucide.createIcons();
-        };
+            if (window.lucide) lucide.createIcons();
+        }
 
-        const renderHome = (t) => `
-            <header class="bg-slate-900 text-white p-6 pt-12 flex justify-between items-center shadow-xl shrink-0">
-                <h1 class="text-3xl font-black italic tracking-tighter">FixIT</h1>
-                <div class="flex gap-2">
-                    <select onchange="window.setLang(this.value)" class="bg-white/10 text-[10px] font-black p-2 rounded-xl border-none outline-none uppercase">
-                        ${['it','es','ca'].map(l => <option value="${l}" ${window.state.lang===l?'selected':''}>${l}</option>).join('')}
-                    </select>
-                    <button onclick="updateState({showModal:'new-project'})" class="bg-blue-600 p-2 rounded-xl active:scale-90 transition-transform"><i data-lucide="plus"></i></button>
+        function renderHome(t) {
+            return `
+            <div id="app-ui" class="h-full flex flex-col">
+                <header class="bg-slate-900 text-white p-6 flex justify-between items-center shrink-0 pt-12 shadow-xl">
+                    <h1 class="text-3xl font-black italic tracking-tighter">FixIT</h1>
+                    <div class="flex gap-3">
+                        <select onchange="updateState({lang:this.value})" class="bg-white/10 text-[10px] font-black p-2 rounded-xl outline-none uppercase">
+                            ${['it','es','ca'].map(l => `<option value="${l}" ${state.lang===l?'selected':''}>${l}</option>`).join('')}
+                        </select>
+                        <button onclick="updateState({showModal:'new-project'})" class="bg-blue-600 p-2 rounded-xl active:scale-90 transition-transform"><i data-lucide="plus"></i></button>
+                    </div>
+                </header>
+                <div class="flex-1 p-6 space-y-4 overflow-y-auto scrollbar-hide">
+                    ${state.projects.map(p => `
+                        <div onclick="window.openProject('${p.id}')" class="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm flex justify-between items-center active:scale-95 transition-all">
+                            <div><h3 class="font-black text-lg uppercase">${p.name}</h3><p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${p.files.length} ${t.docs} • ${p.markers.length} PINS</p></div>
+                            <i data-lucide="chevron-right" class="text-slate-300"></i>
+                        </div>`).join('')}
                 </div>
-            </header>
-            <div class="flex-1 p-6 space-y-4 overflow-y-auto scrollbar-hide pb-32">
-                ${window.state.projects.map(p => `
-                    <div onclick="window.openProject('${p.id}')" class="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm flex justify-between items-center active:scale-95 transition-all cursor-pointer">
-                        <div><h3 class="font-black text-lg uppercase tracking-tight">${p.name}</h3><p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${p.files.length} ${t.docs} • ${p.markers.length} PUNTI</p></div>
-                        <i data-lucide="chevron-right" class="text-slate-300"></i>
-                    </div>`).join('')}
             </div>
-            ${window.state.showModal === 'new-project' ? `
-                <div class="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-6 backdrop-blur-md">
+            ${state.showModal === 'new-project' ? `
+                <div class="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
                     <div class="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl">
-                        <h3 class="text-xl font-black mb-6 uppercase tracking-tight">Nuovo Progetto</h3>
-                        <input id="newProjInput" type="text" class="w-full bg-slate-50 p-5 rounded-3xl mb-8 font-bold outline-none border-2 border-transparent focus:border-blue-500" placeholder="Nome...">
+                        <h3 class="text-2xl font-black mb-6 uppercase tracking-tight">FixIT</h3>
+                        <input id="newProjInput" type="text" class="w-full bg-slate-50 p-5 rounded-3xl mb-8 font-bold outline-none" placeholder="Nome...">
                         <div class="flex gap-4">
                             <button onclick="updateState({showModal:null})" class="flex-1 text-slate-400 font-bold uppercase text-xs">${t.cancel}</button>
-                            <button onclick="window.handleCreateProject()" class="flex-1 bg-blue-600 text-white py-4 rounded-3xl font-black uppercase text-xs">${t.create}</button>
+                            <button onclick="window.createProject()" class="flex-1 bg-blue-600 text-white py-4 rounded-3xl font-black uppercase text-xs">${t.create}</button>
                         </div>
                     </div>
                 </div>` : ''}`;
+        }
 
-        const renderProject = async (t) => {
-            const p = window.state.projects.find(x => x.id === window.state.activeProjectId);
-            const activeFile = p?.files.find(f => f.id === window.state.activeFileId);
-            let display = <div class="text-slate-300 text-center font-black uppercase text-[10px] tracking-widest py-20 h-full flex flex-col items-center justify-center"><i data-lucide="file-text" class="w-12 h-12 mb-4 opacity-10"></i>${t.noDocs}</div>;
+        async function renderProject(t) {
+            const p = state.projects.find(x => x.id === state.activeProjectId);
+            const activeFile = p?.files.find(f => f.id === state.activeFileId);
+            let display = `<div class="text-slate-300 text-center font-black uppercase text-[10px] tracking-widest flex flex-col items-center justify-center h-64"><i data-lucide="file-text" class="w-16 h-16 mb-4 opacity-10"></i>${t.noDocs}</div>`;
 
             if (activeFile) {
-                const buf = await dbGet(activeFile.id);
+                const buf = await storage.get(activeFile.id);
                 if (buf) {
                     const url = URL.createObjectURL(new Blob([buf], { type: activeFile.isPdf ? 'application/pdf' : 'image/jpeg' }));
                     display = `<div class="map-container" style="width:800px; height:${activeFile.isPdf?'1131px':'auto'};">
-                        ${activeFile.isPdf ? <iframe src="${url}#toolbar=0&navpanes=0"></iframe> : <img src="${url}" class="w-full h-auto">}
-                        <div class="absolute inset-0 z-10" onclick="window.addMarker(event)"></div>
-                        ${p.markers.filter(m => m.fileId === window.state.activeFileId).map(m => `
+                        ${activeFile.isPdf ? `<iframe src="${url}#toolbar=0&navpanes=0"></iframe>` : `<img src="${url}" class="w-full h-auto">`}
+                        <div class="absolute inset-0 z-10" onclick="window.addPin(event)"></div>
+                        ${p.markers.filter(m => m.fileId === state.activeFileId).map(m => `
                             <div onclick="event.stopPropagation(); window.openMarker('${m.id}')" 
-                                 class="marker-pin ${m.status==='red'?'bg-red-500':m.status==='green'?'bg-green-500':'bg-yellow-500'}"
-                                 style="left:${m.x}%; top:${m.y}%; width:${10/window.state.zoom}px; height:${10/window.state.zoom}px;">
+                                 class="marker-pin absolute ${m.status==='red'?'bg-red-500':m.status==='green'?'bg-green-500':'bg-yellow-500'}"
+                                 style="left:${m.x}%; top:${m.y}%; width:${10/state.zoom}px; height:${10/state.zoom}px;">
                             </div>`).join('')}
                     </div>`;
                 }
             }
 
             return `
-                <header class="bg-slate-900 text-white p-4 pt-10 flex justify-between items-center shrink-0 z-50 shadow-lg">
-                    <button onclick="window.closeProject()" class="p-2 bg-white/10 rounded-xl"><i data-lucide="chevron-left"></i></button>
-                    <span class="font-black text-xs uppercase tracking-tighter truncate max-w-[150px]">${p?.name}</span>
-                    <button onclick="window.changeView('report')" class="bg-blue-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase active:scale-95 transition-all">${t.report}</button>
+            <div id="app-ui" class="h-full flex flex-col">
+                <header class="bg-slate-900 text-white p-4 flex justify-between items-center shrink-0 z-50 shadow-lg pt-10">
+                    <button onclick="updateState({activeProjectId:null, activeFileId:null, zoom:1})" class="p-2 active:bg-white/10 rounded-xl"><i data-lucide="chevron-left"></i></button>
+                    <span class="font-black text-xs uppercase truncate max-w-[150px] tracking-tighter">${p?.name}</span>
+                    <button onclick="updateState({view:'report'})" class="bg-blue-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg active:scale-95 transition-all">${t.report}</button>
                 </header>
                 <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-                    <aside class="w-full md:w-64 bg-white border-r flex flex-col shrink-0">
+                    <aside class="w-full md:w-64 bg-white border-r flex flex-col shrink-0 overflow-hidden">
                         <div class="p-4 border-b flex justify-between items-center bg-slate-50">
                             <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">${t.docs}</span>
-                            <label class="text-blue-600 p-1 cursor-pointer"><i data-lucide="plus"></i><input type="file" class="hidden" onchange="window.handleFileUpload(event)"></label>
+                            <label class="text-blue-600 p-1 cursor-pointer"><i data-lucide="plus"></i><input type="file" class="hidden" onchange="window.uploadFile(event)"></label>
                         </div>
-                        <div class="flex md:flex-col overflow-x-auto md:overflow-y-auto scrollbar-hide">
+                        <div class="flex md:flex-col overflow-x-auto md:overflow-y-auto scrollbar-hide pb-10">
                             ${p?.files.map(f => `
-                                <div class="flex items-center border-b ${window.state.activeFileId === f.id ? 'bg-blue-50 border-r-4 border-blue-600' : ''}">
-                                    <div onclick="updateState({activeFileId:'${f.id}', zoom:1})" class="flex-1 p-4 flex items-center gap-3 cursor-pointer overflow-hidden">
+                                <div class="flex items-center border-b ${state.activeFileId === f.id ? 'bg-blue-50 border-r-4 border-blue-600' : ''}">
+                                    <div onclick="updateState({activeFileId:'${f.id}', zoom:1})" class="flex-1 p-4 flex items-center gap-3 cursor-pointer overflow-hidden text-xs">
                                         <i data-lucide="file-text" class="w-4 h-4 shrink-0"></i>
-                                        <span class="text-[11px] font-bold uppercase truncate">${f.name}</span>
+                                        <span class="font-bold uppercase truncate">${f.name}</span>
                                     </div>
-                                    <button onclick="updateState({showModal:{type:'rename-file', fileId:'${f.id}', currentName:'${f.name}'}})" class="p-4 text-slate-300"><i data-lucide="edit-2" class="w-3 h-3"></i></button>
+                                    <button onclick="updateState({showModal:{type:'rename', fileId:'${f.id}', name:'${f.name}'}})" class="p-4 text-slate-300 hover:text-blue-600"><i data-lucide="edit-2" class="w-3 h-3"></i></button>
                                 </div>`).join('')}
                         </div>
                     </aside>
-                    <section class="flex-1 bg-slate-200 relative overflow-hidden">
+                    <section class="flex-1 relative bg-slate-200 overflow-hidden">
                         <div class="absolute top-4 right-4 z-[70] flex flex-col gap-2">
-                            <button onclick="updateState({zoom:window.state.zoom+1})" class="bg-white p-3 rounded-2xl shadow-xl active:scale-90 transition-all"><i data-lucide="zoom-in"></i></button>
-                            <button onclick="updateState({zoom:Math.max(1, window.state.zoom-1)})" class="bg-white p-3 rounded-2xl shadow-xl active:scale-90 transition-all"><i data-lucide="zoom-out"></i></button>
+                            <button onclick="updateState({zoom:state.zoom+0.5})" class="bg-white p-3 rounded-2xl shadow-xl active:scale-90"><i data-lucide="zoom-in"></i></button>
+                            <button onclick="updateState({zoom:Math.max(1, state.zoom-0.5)})" class="bg-white p-3 rounded-2xl shadow-xl active:scale-90"><i data-lucide="zoom-out"></i></button>
                         </div>
                         <div class="map-viewport scrollbar-hide">
-                            <div style="transform: scale(${window.state.zoom})">
+                            <div style="transform: scale(${state.zoom})">
                                 ${display}
                             </div>
                         </div>
                     </section>
                 </div>
-                ${renderModals(t)}`;
-        };
+            </div>
+            ${renderModals(t)}`;
+        }
 
-        const renderReport = async (t) => {
-            const p = window.state.projects.find(x => x.id === window.state.activeProjectId);
+        async function renderReport(t) {
+            const p = state.projects.find(x => x.id === state.activeProjectId);
             let content = "";
-            for (const [i, m] of p.markers.entries()) {
-                const fName = p.files.find(f => f.id === m.fileId)?.name || "";
+            for (const [idx, m] of p.markers.entries()) {
+                const fName = p.files.find(f => f.id === m.fileId)?.name || "Visual";
                 const photos = await Promise.all(m.photos.map(async pid => {
-                    const buf = await dbGet(pid);
-                    return <img src="${URL.createObjectURL(new Blob([buf], {type:'image/jpeg'}))}" style="width:100%; border:1px solid black; margin-bottom:5px;">;
+                    const buf = await storage.get(pid);
+                    return buf ? `<img src="${URL.createObjectURL(new Blob([buf], {type:'image/jpeg'}))}" style="width:100%; border:1px solid black; margin-bottom:5px;">` : '';
                 }));
-
                 content += `
-                <div style="border:1px solid black; padding:15px; margin-bottom:40px; page-break-inside:avoid; background:white; box-shadow:4px 4px 0px black;">
+                <div style="border:1px solid black; padding:15px; margin-bottom:30px; page-break-inside:avoid; background:white; box-shadow:4px 4px 0px black;">
                     <div style="display:flex; justify-content:space-between; background:black; color:white; padding:8px; margin-bottom:15px;">
-                        <span style="font-weight:900; font-size:12px;">INF. 0${i+1}</span>
+                        <span style="font-weight:900; font-size:12px;">INF. 0${idx+1}</span>
                         <span style="background:white; color:black; padding:2px 8px; font-size:10px; font-weight:900; border-radius:3px; text-transform:uppercase;">${m.status==='red'?t.crit:m.status==='green'?t.ok:t.pend}</span>
                     </div>
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; font-size:11px;">
                         <div>
                             <p style="font-size:8px; font-weight:900; color:#666; text-transform:uppercase;">${t.element}</p>
-                            <p style="font-weight:700; border-bottom:1px solid #ddd; margin-bottom:15px;">${m.title.toUpperCase()}</p>
+                            <p style="font-weight:700; border-bottom:1px solid #ddd; padding-bottom:5px; margin-bottom:15px;">${m.title.toUpperCase()}</p>
                             <p style="font-size:8px; font-weight:900; color:#666; text-transform:uppercase;">${t.loc}</p>
                             <p style="font-style:italic; margin-bottom:15px;">${fName}</p>
                             <p style="font-size:8px; font-weight:900; color:#666; text-transform:uppercase;">NOTE</p>
@@ -351,72 +326,75 @@
             }
 
             return `
-            <div class="h-full flex flex-col bg-slate-800 no-print">
-                <header class="bg-slate-900 text-white p-4 pt-10 flex justify-between items-center sticky top-0 z-50">
-                    <button onclick="window.changeView('app')" class="font-bold text-sm uppercase"><i data-lucide="chevron-left" class="inline"></i> CHIUDI</button>
+            <div class="h-full flex flex-col bg-slate-800 overflow-y-auto pt-10 no-print">
+                <header class="bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-50">
+                    <button onclick="updateState({view:'app'})" class="font-bold text-sm uppercase tracking-widest flex items-center gap-2"><i data-lucide="chevron-left"></i> CHIUDI</button>
                     <button onclick="window.print()" class="bg-white text-black px-6 py-2 rounded-full font-black text-xs uppercase shadow-xl"><i data-lucide="printer" class="inline w-4 mr-1"></i> SALVA PDF</button>
                 </header>
                 <div class="p-6 md:p-10 max-w-4xl mx-auto w-full">
-                    <div class="bg-white p-10 min-h-[29cm] shadow-2xl text-black font-sans">
+                    <div class="bg-white p-10 md:p-16 min-h-[29.7cm] shadow-2xl text-black">
                         <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:8px solid black; padding-bottom:10px; margin-bottom:40px;">
-                            <div><h1 style="font-size:48px; font-weight:900; font-style:italic; margin:0; line-height:1;">TRAM</h1><p style="font-size:7px; font-weight:900; letter-spacing:3px; text-transform:uppercase;">CONTROL • GESTIÓ • OBRES • PROJECTES</p></div>
-                            <div style="text-align:right; text-transform:uppercase; font-size:9px; font-weight:700;"><h2 style="font-size:20px; font-weight:900; margin:0;">${t.repTitle}</h2><p>${p.name} • ${new Date().toLocaleDateString()}</p></div>
+                            <div><h1 style="font-size:48px; font-weight:900; font-style:italic; margin:0; line-height:1;">TRAM</h1><p style="font-size:7px; font-weight:900; letter-spacing:3px; text-transform:uppercase; margin-top:5px;">CONTROL • GESTIÓ • OBRES • PROJECTES</p></div>
+                            <div style="text-align:right; text-transform:uppercase; font-size:9px; font-weight:700;"><h2 style="font-size:20px; font-weight:900; margin:0;">${t.repTitle}</h2><p>${t.proj}: ${p.name}</p><p>${t.date}: ${new Date().toLocaleDateString()}</p></div>
                         </div>
                         ${content}
                     </div>
                 </div>
             </div>
-            <div id="report-print-view" class="hidden"><div style="padding:40px;">
-                <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:8px solid black; padding-bottom:10px; margin-bottom:40px;">
-                    <div><h1 style="font-size:48px; font-weight:900; font-style:italic; margin:0;">TRAM</h1><p style="font-size:7px; font-weight:900; letter-spacing:3px; text-transform:uppercase;">CONTROL • GESTIÓ • OBRES • PROJECTES</p></div>
-                    <div style="text-align:right; text-transform:uppercase; font-size:9px; font-weight:700;"><h2 style="font-size:20px; font-weight:900; margin:0;">${t.repTitle}</h2><p>${p.name} • ${new Date().toLocaleDateString()}</p></div>
+            <div id="report-print-view" class="hidden">
+                <div style="padding:40px;">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:8px solid black; padding-bottom:10px; margin-bottom:40px;">
+                        <div><h1 style="font-size:48px; font-weight:900; font-style:italic; margin:0;">TRAM</h1><p style="font-size:7px; font-weight:900; letter-spacing:3px; text-transform:uppercase; margin-top:5px;">CONTROL • GESTIÓ • OBRES • PROJECTES</p></div>
+                        <div style="text-align:right; text-transform:uppercase; font-size:9px; font-weight:700;"><h2 style="font-size:20px; font-weight:900; margin:0;">${t.repTitle}</h2><p>${t.proj}: ${p.name}</p><p>${t.date}: ${new Date().toLocaleDateString()}</p></div>
+                    </div>
+                    ${content}
                 </div>
-                ${content}
-            </div></div>`;
-        };
+            </div>`;
+        }
 
-        const renderModals = (t) => {
-            if(!window.state.showModal) return '';
+        function renderModals(t) {
+            if(!state.showModal) return '';
             
-            if(window.state.showModal.type === 'rename-file') {
-                return `<div class="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-6 backdrop-blur-md">
+            if(state.showModal.type === 'rename') {
+                return `
+                <div class="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-6 backdrop-blur-md">
                     <div class="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl">
                         <h3 class="text-xl font-black mb-6 uppercase tracking-tight">${t.rename}</h3>
-                        <input id="renameInput" type="text" class="w-full bg-slate-50 p-5 rounded-3xl mb-8 font-bold outline-none border-2 border-blue-100" value="${window.state.showModal.currentName}">
+                        <input id="renameInput" type="text" class="w-full bg-slate-50 p-5 rounded-3xl mb-8 font-bold outline-none border-2 border-blue-100" value="${state.showModal.name}">
                         <div class="flex gap-4">
                             <button onclick="updateState({showModal:null})" class="flex-1 text-slate-400 font-bold uppercase text-xs">${t.cancel}</button>
-                            <button onclick="window.handleRename()" class="flex-1 bg-slate-900 text-white py-4 rounded-3xl font-black uppercase text-xs active:scale-95 transition-all">${t.save}</button>
+                            <button onclick="window.renameFile()" class="flex-1 bg-slate-900 text-white py-4 rounded-3xl font-black uppercase text-xs active:scale-95 transition-all">${t.save}</button>
                         </div>
                     </div>
                 </div>`;
             }
 
-            if(window.state.showModal.type === 'marker-detail') {
-                const proj = window.state.projects.find(x=>x.id===window.state.activeProjectId);
-                const m = proj.markers.find(x=>x.id===window.state.showModal.id);
-                if(!m) return '';
-                return `<div class="fixed inset-0 bg-black/80 z-[200] flex items-end md:items-center justify-center p-0 md:p-6 backdrop-blur-md">
+            if(state.showModal.type === 'marker-detail') {
+                const proj = state.projects.find(x=>x.id===state.activeProjectId);
+                const m = proj.markers.find(x=>x.id===state.showModal.id);
+                return `
+                <div class="fixed inset-0 bg-black/80 z-[200] flex items-end md:items-center justify-center p-0 md:p-6 backdrop-blur-sm">
                     <div class="bg-white w-full max-w-xl rounded-t-[40px] md:rounded-[40px] overflow-hidden flex flex-col max-h-[92vh] shadow-2xl">
                         <div class="p-6 bg-slate-900 text-white flex justify-between items-center shrink-0">
                             <h3 class="font-black uppercase tracking-tight italic">FixIT - ${t.details}</h3>
                             <button onclick="updateState({showModal:null, modalPhotos:[]})" class="p-2 bg-white/10 rounded-full active:scale-90 transition-all"><i data-lucide="x"></i></button>
                         </div>
                         <div class="p-8 overflow-y-auto space-y-8 scrollbar-hide pb-32">
-                            <input oninput="window.saveTextSilent('${m.id}', 'title', this.value)" type="text" value="${m.title}" class="w-full text-xl font-black bg-slate-50 p-5 rounded-3xl outline-none" placeholder="${t.title}">
-                            <textarea oninput="window.saveTextSilent('${m.id}', 'notes', this.value)" class="w-full min-h-[100px] bg-slate-50 p-5 rounded-3xl outline-none font-medium" placeholder="${t.notes}">${m.notes}</textarea>
+                            <input oninput="window.setMarkerData('${m.id}', 'title', this.value)" type="text" value="${m.title}" class="w-full text-xl font-black bg-slate-50 p-5 rounded-3xl outline-none" placeholder="${t.title}">
+                            <textarea oninput="window.setMarkerData('${m.id}', 'notes', this.value)" class="w-full min-h-[100px] bg-slate-50 p-5 rounded-3xl outline-none font-medium" placeholder="${t.notes}">${m.notes}</textarea>
                             <div class="flex gap-2">
-                                <button onclick="window.updateStatus('${m.id}', 'red')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='red'?'bg-red-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.crit}</button>
-                                <button onclick="window.updateStatus('${m.id}', 'yellow')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='yellow'?'bg-yellow-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.pend}</button>
-                                <button onclick="window.updateStatus('${m.id}', 'green')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='green'?'bg-green-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.ok}</button>
+                                <button onclick="window.setMarkerStatus('${m.id}', 'red')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='red'?'bg-red-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.crit}</button>
+                                <button onclick="window.setMarkerStatus('${m.id}', 'yellow')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='yellow'?'bg-yellow-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.pend}</button>
+                                <button onclick="window.setMarkerStatus('${m.id}', 'green')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='green'?'bg-green-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.ok}</button>
                             </div>
                             <div class="grid grid-cols-2 gap-4">
-                                <label class="bg-slate-900 text-white p-6 rounded-[32px] flex flex-col items-center gap-2 cursor-pointer active:scale-95 transition-all shadow-xl"><i data-lucide="camera" class="w-8 h-8"></i><span class="text-[10px] font-black uppercase tracking-widest">${t.cam}</span><input type="file" capture="environment" class="hidden" onchange="window.addPhoto('${m.id}', event)"></label>
+                                <label class="bg-slate-900 text-white p-6 rounded-[32px] flex flex-col items-center gap-2 cursor-pointer active:scale-95 shadow-xl"><i data-lucide="camera" class="w-8 h-8"></i><span class="text-[10px] font-black uppercase tracking-widest">${t.cam}</span><input type="file" capture="environment" class="hidden" onchange="window.addPhoto('${m.id}', event)"></label>
                                 <label class="bg-white border-4 border-slate-100 p-6 rounded-[32px] flex flex-col items-center gap-2 cursor-pointer active:scale-95 shadow-sm"><i data-lucide="image" class="w-8 h-8 text-slate-300"></i><span class="text-[10px] font-black uppercase text-slate-300 tracking-widest">${t.gal}</span><input type="file" class="hidden" onchange="window.addPhoto('${m.id}', event)"></label>
                             </div>
                             <div class="grid grid-cols-3 gap-3">
-                                ${window.state.modalPhotos.map(p => <div class="aspect-square rounded-2xl overflow-hidden border border-slate-100 shadow-sm relative group"><img src="${p.url}" class="w-full h-full object-cover"></div>).join('')}
+                                ${state.modalPhotos.map(p => `<div class="aspect-square rounded-2xl overflow-hidden border border-slate-100 shadow-sm relative group"><img src="${p.url}" class="w-full h-full object-cover"></div>`).join('')}
                             </div>
-                            <button onclick="if(confirm('Eliminare?')){ const projs=[...window.state.projects]; const pr=projs.find(x=>x.id==='${window.state.activeProjectId}'); pr.markers=pr.markers.filter(x=>x.id!=='${m.id}'); updateState({projects:projs, showModal:null}); }" class="w-full py-4 text-red-500 font-black text-[10px] uppercase tracking-widest">${t.del}</button>
+                            <button onclick="if(confirm('Eliminare?')){ const projs=[...state.projects]; const pr=projs.find(x=>x.id==='${state.activeProjectId}'); pr.markers=pr.markers.filter(x=>x.id!=='${m.id}'); updateState({projects:projs, showModal:null}); }" class="w-full py-4 text-red-500 font-black text-[10px] uppercase tracking-widest">${t.del}</button>
                         </div>
                         <div class="p-4 bg-white/80 backdrop-blur-md border-t absolute bottom-0 w-full left-0 safe-bottom">
                             <button onclick="updateState({showModal:null, modalPhotos:[]})" class="w-full bg-slate-900 text-white py-5 rounded-[28px] font-black uppercase text-xs active:scale-95 shadow-xl transition-all">${t.save}</button>
@@ -425,9 +403,10 @@
                 </div>`;
             }
             return '';
-        };
+        }
 
         window.onload = async () => { await initDB(); await render(); };
     </script>
 </body>
 </html>
+
