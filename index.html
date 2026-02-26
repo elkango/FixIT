@@ -4,409 +4,1053 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     
-    <!-- PWA Apple Support -->
+    <!-- Setup PWA per iOS -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="FixIT">
     
-    <title>FixIT</title>
+    <title>FixIT - Field Inspection</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
-        body { 
-            font-family: 'Inter', sans-serif; 
-            -webkit-tap-highlight-color: transparent; 
-            background-color: #f1f5f9;
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+        
+        :root {
+            --safe-top: env(safe-area-inset-top, 44px);
+            --safe-bottom: env(safe-area-inset-bottom, 34px);
+            --app-bg: #f1f5f9;
+            --app-accent: #2563eb;
+        }
+
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--app-bg);
             margin: 0; padding: 0;
+            height: 100vh; width: 100vw;
+            overflow: hidden;
+            display: flex; flex-direction: column;
+            user-select: none; /* Previene la selezione del testo fastidiosa su iOS */
         }
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .marker-pin { transition: transform 0.1s ease; cursor: pointer; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.3); position: absolute; transform: translate(-50%, -50%); z-index: 50; }
-        
-        /* Layout per la Mappa */
-        .map-viewport { width: 100%; height: 100%; overflow: auto; display: flex; justify-content: center; align-items: flex-start; -webkit-overflow-scrolling: touch; background: #cbd5e1; }
-        .map-container { position: relative; background: white; box-shadow: 0 20px 40px rgba(0,0,0,0.2); transform-origin: top center; margin-top: 20px; margin-bottom: 60px; }
-        
-        /* Stampa Report */
-        @media print {
-            #app-ui, .no-print { display: none !important; }
-            #report-view { display: block !important; background: white; }
-            .page-break { page-break-after: always; }
+
+        /* HEADER */
+        .app-header {
+            background-color: #0f172a; color: white;
+            padding-top: var(--safe-top);
+            padding-left: 20px; padding-right: 20px; padding-bottom: 15px;
+            z-index: 100; flex-shrink: 0;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+
+        /* MOTORE MAPPA */
+        .map-container {
+            flex: 1; overflow: hidden; position: relative;
+            background-color: #e2e8f0; /* Sfondo neutro per contrastare le planimetrie */
         }
         
-        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
-        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* Il Viewport intercetta i tocchi */
+        .map-viewport {
+            width: 100%; height: 100%;
+            position: absolute; top: 0; left: 0;
+            touch-action: none; /* Disabilita gesture browser native (scroll, zoom doppio tap) */
+        }
+
+        /* Il Wrapper viene mosso e scalato dalla GPU */
+        .map-wrapper {
+            position: absolute; top: 0; left: 0;
+            transform-origin: 0 0;
+            will-change: transform;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+
+        .map-image {
+            display: block;
+            max-width: none;
+            pointer-events: none; /* I tocchi passano attraverso l'immagine al viewport */
+        }
+
+        /* PIN */
+        .pin {
+            position: absolute;
+            width: 32px; height: 32px;
+            border-radius: 50%; border: 3px solid white;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            transform: translate(-50%, -50%);
+            z-index: 50;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 900; font-size: 12px; color: white;
+            pointer-events: auto; /* I pin sono cliccabili */
+            transition: border-color 0.2s;
+            flex-shrink: 0; /* Evita che si deformino a barra */
+        }
+        .pin:active { border-color: #000; transform: translate(-50%, -50%) scale(0.9); }
+        
+        .pin-basso { background: #3b82f6; } /* Blu */
+        .pin-medio { background: #eab308; } /* Giallo */
+        .pin-alto { background: #ef4444; }  /* Rosso */
+
+        /* MODALI */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px);
+            z-index: 2000; display: flex; align-items: flex-end; justify-content: center;
+            opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        
+        .modal-content {
+            background: white; width: 100%; max-width: 600px;
+            border-radius: 32px 32px 0 0; max-height: 90vh;
+            display: flex; flex-direction: column; overflow: hidden;
+            padding-bottom: var(--safe-bottom);
+            transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .modal-overlay.active .modal-content { transform: translateY(0); }
+
+        .hide-scroll::-webkit-scrollbar { display: none; }
+
+        /* PDF INVISIBILE - Serve per generare il layout senza mostrarlo a schermo */
+        #pdf-hidden-container {
+            position: fixed;
+            top: -9999px; left: -9999px;
+            z-index: -1;
+            width: 210mm;
+            background: white;
+        }
     </style>
 </head>
 <body>
 
-    <div id="app" class="h-screen flex flex-col">
-        <!-- Schermata di avvio -->
+    <!-- Contenitore Principale App -->
+    <div id="app" class="h-screen w-screen flex flex-col">
         <div class="flex-1 flex flex-col items-center justify-center bg-slate-900 text-white">
-            <div class="loader mb-4"></div>
-            <h1 class="text-3xl font-black italic tracking-tighter">FixIT</h1>
+            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-white mb-4"></div>
+            <p class="text-xs font-bold uppercase tracking-widest opacity-50">Inizializzazione Sistema...</p>
         </div>
     </div>
 
+    <!-- Modali -->
+    <div id="modal" class="modal-overlay" onclick="window.closeModal()">
+        <div id="modal-body" class="modal-content" onclick="event.stopPropagation()">
+            <!-- Dinamico -->
+        </div>
+    </div>
+
+    <!-- Loader Generazione PDF -->
+    <div id="pdf-loading" class="fixed inset-0 bg-slate-900/90 z-[9999] hidden flex-col items-center justify-center text-white backdrop-blur-sm">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-4 border-blue-500 mb-4"></div>
+        <h2 class="text-lg font-black uppercase tracking-widest">Generazione PDF...</h2>
+        <p class="text-sm text-slate-400 mt-2">Attendere prego</p>
+    </div>
+
+    <!-- Contenitore invisibile dove viene "disegnato" il PDF -->
+    <div id="pdf-hidden-container"></div>
+
     <script>
-        // --- GESTIONE DATABASE INDEXEDDB (Per PDF e Foto) ---
+        /* ==========================================
+           1. DATABASE LOCALE (IndexedDB)
+           ========================================== */
         let db;
+        const DB_NAME = "FixIT_Core_V1";
+        
         async function initDB() {
-            return new Promise((resolve) => {
-                const request = indexedDB.open("FixIT_DB_v12", 1);
-                request.onupgradeneeded = e => e.target.result.createObjectStore("blobs");
-                request.onsuccess = e => { db = e.target.result; resolve(); };
-                request.onerror = () => resolve();
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, 1);
+                req.onupgradeneeded = (e) => {
+                    const database = e.target.result;
+                    if(!database.objectStoreNames.contains("state")) database.createObjectStore("state");
+                    if(!database.objectStoreNames.contains("files")) database.createObjectStore("files");
+                };
+                req.onsuccess = (e) => { db = e.target.result; resolve(); };
+                req.onerror = () => reject("Errore DB");
             });
         }
 
-        const storage = {
-            save: (id, data) => new Promise(res => {
-                const tx = db.transaction("blobs", "readwrite");
-                tx.objectStore("blobs").put(data, id);
-                tx.oncomplete = res;
+        const Storage = {
+            saveFile: (id, blob) => new Promise(res => {
+                const tx = db.transaction("files", "readwrite");
+                tx.objectStore("files").put(blob, id);
+                tx.oncomplete = () => res(true);
             }),
-            get: (id) => new Promise(res => {
-                const tx = db.transaction("blobs", "readonly");
-                const req = tx.objectStore("blobs").get(id);
+            getFile: (id) => new Promise(res => {
+                const tx = db.transaction("files", "readonly");
+                const req = tx.objectStore("files").get(id);
                 req.onsuccess = () => res(req.result);
-                req.onerror = () => res(null);
+            }),
+            deleteBlob: (id) => new Promise(res => {
+                const tx = db.transaction("files", "readwrite");
+                tx.objectStore("files").delete(id);
+                tx.oncomplete = () => res(true);
+            }),
+            saveState: (stateObj) => new Promise(res => {
+                const tx = db.transaction("state", "readwrite");
+                tx.objectStore("state").put(JSON.parse(JSON.stringify(stateObj)), "app_state");
+                tx.oncomplete = () => res(true);
+            }),
+            getState: () => new Promise(res => {
+                const tx = db.transaction("state", "readonly");
+                const req = tx.objectStore("state").get("app_state");
+                req.onsuccess = () => res(req.result || null);
             })
         };
 
-        // --- TRADUZIONI ---
+        /* ==========================================
+           2. STATO APPLICATIVO E MODALI CUSTOM
+           ========================================== */
         const i18n = {
-            it: { projects: "I Miei Progetti", newProj: "Nuovo Progetto", create: "Crea", cancel: "Annulla", docs: "Piani", add: "Aggiungi", noDocs: "Carica un PDF", report: "Genera PDF", details: "Rilievo", title: "Titolo", notes: "Note", crit: "CRITICO", pend: "PENDENTE", ok: "RISOLTO", cam: "Camera", gal: "Galleria", save: "Chiudi", del: "Elimina", repTitle: "RAPPORTO REVISIONE OPERA", rename: "Rinomina Piano", element: "ELEMENTO", loc: "UBICAZIONE" },
-            es: { projects: "Mis Proyectos", newProj: "Nuevo Proyecto", create: "Crear", cancel: "Cancelar", docs: "Planos", add: "Añadir", noDocs: "Carga un PDF", report: "Generar PDF", details: "Detalle", title: "Título", notes: "Notas", crit: "CRÍTICO", pend: "PENDIENTE", ok: "RESUELTO", cam: "Cámara", gal: "Galería", save: "Cerrar", del: "Eliminar", repTitle: "INFORME REVISIÓN DE OBRA", rename: "Renombrar", element: "ELEMENTO", loc: "UBICACIÓN" },
-            ca: { projects: "Projectes", newProj: "Nou Projecte", create: "Crear", cancel: "Cancel·lar", docs: "Plànols", add: "Afegir", noDocs: "Carrega un PDF", report: "Generar PDF", details: "Detall", title: "Títol", notes: "Notes", crit: "CRÍTIC", pend: "PENDENT", ok: "RESOLT", cam: "Càmera", gal: "Galeria", save: "Desar", del: "Eliminar", repTitle: "INFORME REVISIÓ D'OBRA", rename: "Canviar nom", element: "ELEMENT", loc: "UBICACIÓ" }
+            it: { home: "Progetti", newProj: "Nuovo Cantiere", plan: "Piani", addPlan: "Aggiungi Planimetria", mapNoData: "Seleziona o carica una planimetria", report: "Condividi PDF", cancel: "Annulla", create: "Crea", save: "Salva e Chiudi", title: "Titolo", desc: "Descrizione", critBasso: "Basso", critMedio: "Medio", critAlto: "Alto", coords: "Coordinate", noProj: "Nessun progetto. Creane uno.", cam: "Fotocamera", gal: "Galleria", delPin: "Elimina Punto" },
+            es: { home: "Proyectos", newProj: "Nuevo Proyecto", plan: "Planos", addPlan: "Añadir Plano", mapNoData: "Selecciona o sube un plano", report: "Compartir PDF", cancel: "Cancelar", create: "Crear", save: "Guardar y Cerrar", title: "Título", desc: "Descripción", critBasso: "Bajo", critMedio: "Medio", critAlto: "Alto", coords: "Coordenadas", noProj: "No hay proyectos. Crea uno.", cam: "Cámara", gal: "Galería", delPin: "Eliminar Punto" },
+            ca: { home: "Projectes", newProj: "Nou Projecte", plan: "Plànols", addPlan: "Afegir Plànol", mapNoData: "Selecciona o puja un plànol", report: "Compartir PDF", cancel: "Cancel·lar", create: "Crear", save: "Desar i Tancar", title: "Títol", desc: "Descripció", critBasso: "Baix", critMedio: "Mitjà", critAlto: "Alt", coords: "Coordenades", noProj: "Cap projecte. Crea'n un.", cam: "Càmera", gal: "Galeria", delPin: "Eliminar Punt" }
         };
 
-        // --- STATO ---
         let state = {
-            lang: localStorage.getItem('fixit_lang') || 'it',
-            projects: JSON.parse(localStorage.getItem('fixit_projs')) || [],
-            activeProjectId: null,
-            activeFileId: null,
-            zoom: 1,
-            showModal: null, 
-            view: 'app',
-            modalPhotos: []
+            lang: 'it',
+            view: 'home',
+            activeProjId: null,
+            activePlanId: null,
+            projects: [],
+            showModal: null
         };
 
-        async function updateState(patch) {
-            state = { ...state, ...patch };
-            localStorage.setItem('fixit_projs', JSON.stringify(state.projects));
-            localStorage.setItem('fixit_lang', state.lang);
+        let fileCache = {};
+
+        async function updateState(updates) {
+            state = { ...state, ...updates };
+            await Storage.saveState(state);
             render();
         }
 
-        // --- LOGICA ---
-        window.openProject = (id) => updateState({ activeProjectId: String(id), activeFileId: null, zoom: 1 });
+        window.confirmAction = (action, payload, message) => {
+            state.showModal = { action, payload };
+            const html = `
+                <div class="p-8 text-black flex flex-col items-center text-center">
+                    <div class="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
+                        <i data-lucide="alert-triangle" class="w-8 h-8"></i>
+                    </div>
+                    <h3 class="text-xl font-black mb-2 uppercase text-slate-800">Attenzione</h3>
+                    <p class="font-medium text-slate-500 mb-8">${message}</p>
+                    <div class="flex gap-4 w-full">
+                        <button onclick="window.closeModal()" class="flex-1 text-slate-500 font-bold uppercase text-xs py-4 rounded-xl border-2 border-slate-100 active:bg-slate-50">Annulla</button>
+                        <button onclick="window.executeAction()" class="flex-1 bg-red-600 text-white py-4 rounded-xl font-black uppercase shadow-lg active:scale-95 transition-transform">Elimina</button>
+                    </div>
+                </div>
+            `;
+            document.getElementById('modal-body').innerHTML = html;
+            document.getElementById('modal').classList.add('active');
+            lucide.createIcons();
+        };
+
+        // AGGIUNTA: Funzione per prompt rinomina
+        window.promptAction = (action, payload, title, defaultValue) => {
+            state.showModal = { action, payload };
+            const t = i18n[state.lang];
+            const html = `
+                <div class="p-8 text-black">
+                    <h3 class="text-xl font-black mb-6 uppercase">${title}</h3>
+                    <input id="promptInput" type="text" value="${defaultValue}" class="w-full bg-slate-100 p-5 rounded-2xl mb-8 font-bold outline-none border-2 border-transparent focus:border-blue-500">
+                    <div class="flex gap-4">
+                        <button onclick="window.closeModal()" class="flex-1 text-slate-400 font-bold uppercase text-xs py-4 rounded-xl border-2 border-slate-100 active:bg-slate-50">${t.cancel}</button>
+                        <button onclick="window.executePromptAction()" class="flex-1 bg-blue-600 text-white py-4 rounded-xl font-black uppercase shadow-lg active:scale-95 transition-transform">Salva</button>
+                    </div>
+                </div>
+            `;
+            document.getElementById('modal-body').innerHTML = html;
+            document.getElementById('modal').classList.add('active');
+            setTimeout(() => {
+                const input = document.getElementById('promptInput');
+                if(input) { input.focus(); input.select(); }
+            }, 100);
+        };
+
+        window.executeAction = async () => {
+            if(!state.showModal) return;
+            const { action, payload } = state.showModal;
+            
+            if (action === 'delete-project') {
+                const projs = JSON.parse(JSON.stringify(state.projects));
+                const pToDelete = projs.find(x => x.id === payload);
+                if(pToDelete) {
+                    for(let plan of pToDelete.plans) await Storage.deleteBlob(plan.id);
+                    for(let pin of pToDelete.pins) {
+                        if(pin.photos) {
+                            for(let photo of pin.photos) await Storage.deleteBlob(photo);
+                        }
+                    }
+                }
+                updateState({ projects: projs.filter(x => x.id !== payload) });
+                window.closeModal();
+            }
+            else if (action === 'delete-plan') {
+                const projs = JSON.parse(JSON.stringify(state.projects));
+                const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+                projs[pIdx].plans = projs[pIdx].plans.filter(p => p.id !== payload);
+                projs[pIdx].pins = projs[pIdx].pins.filter(p => p.planId !== payload);
+                await Storage.deleteBlob(payload);
+                const nextPlanId = projs[pIdx].plans.length > 0 ? projs[pIdx].plans[0].id : null;
+                updateState({ projects: projs, activePlanId: nextPlanId });
+                window.closeModal();
+            }
+            else if (action === 'delete-pin') {
+                const projs = JSON.parse(JSON.stringify(state.projects));
+                const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+                projs[pIdx].pins = projs[pIdx].pins.filter(p => p.id !== payload);
+                updateState({ projects: projs });
+                window.closeModal();
+            }
+            else if (action === 'delete-photo') {
+                const { pinId, photoId } = payload;
+                const projs = [...state.projects];
+                const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+                const pinIdx = projs[pIdx].pins.findIndex(p => p.id === pinId);
+                projs[pIdx].pins[pinIdx].photos = projs[pIdx].pins[pinIdx].photos.filter(id => id !== photoId);
+                await Storage.deleteBlob(photoId);
+                if(fileCache[photoId]) {
+                    URL.revokeObjectURL(fileCache[photoId]);
+                    delete fileCache[photoId];
+                }
+                state.projects = projs;
+                await Storage.saveState(state);
+                window.openPinModal(pinId);
+            }
+        };
+
+        // AGGIUNTA: Esecuzione dell'azione di rinomina
+        window.executePromptAction = async () => {
+            if(!state.showModal) return;
+            const { action, payload } = state.showModal;
+            const newValue = document.getElementById('promptInput').value.trim();
+            if(!newValue) return;
+
+            if (action === 'rename-project') {
+                const projs = JSON.parse(JSON.stringify(state.projects));
+                const pIdx = projs.findIndex(x => x.id === payload);
+                if(pIdx > -1) {
+                    projs[pIdx].name = newValue;
+                    updateState({ projects: projs });
+                }
+            }
+            else if (action === 'rename-plan') {
+                const projs = JSON.parse(JSON.stringify(state.projects));
+                const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+                const planIdx = projs[pIdx].plans.findIndex(p => p.id === payload);
+                if(planIdx > -1) {
+                    projs[pIdx].plans[planIdx].name = newValue;
+                    updateState({ projects: projs });
+                }
+            }
+            window.closeModal();
+        };
+
+        /* ==========================================
+           3. MOTORE PAN E ZOOM E GESTIONE MAPPA
+           ========================================== */
+        let transform = { x: 20, y: 20, scale: 1 };
+        let tData = { isDragging: false, lastX: 0, lastY: 0, initDist: 0, initScale: 1, moved: false, mapCX: 0, mapCY: 0 };
+
+        function initMapTouch() {
+            const viewport = document.getElementById('map-viewport');
+            if(!viewport) return;
+
+            viewport.addEventListener('touchstart', (e) => {
+                tData.moved = false;
+                if(e.touches.length === 2) {
+                    tData.initDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                    tData.initScale = transform.scale;
+                    tData.isDragging = false;
+
+                    const vRect = viewport.getBoundingClientRect();
+                    const cx = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - vRect.left;
+                    const cy = ((e.touches[0].clientY + e.touches[1].clientY) / 2) - vRect.top;
+
+                    tData.mapCX = (cx - transform.x) / transform.scale;
+                    tData.mapCY = (cy - transform.y) / transform.scale;
+
+                } else if(e.touches.length === 1) {
+                    tData.isDragging = true;
+                    tData.lastX = e.touches[0].pageX;
+                    tData.lastY = e.touches[0].pageY;
+                }
+            }, { passive: false });
+
+            viewport.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if(e.touches.length === 2 && tData.initDist > 0) {
+                    tData.moved = true;
+                    const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                    transform.scale = Math.max(0.1, Math.min(10, tData.initScale * (dist / tData.initDist)));
+
+                    const vRect = viewport.getBoundingClientRect();
+                    const cx = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - vRect.left;
+                    const cy = ((e.touches[0].clientY + e.touches[1].clientY) / 2) - vRect.top;
+
+                    transform.x = cx - tData.mapCX * transform.scale;
+                    transform.y = cy - tData.mapCY * transform.scale;
+
+                    applyTransform();
+                } else if(e.touches.length === 1 && tData.isDragging) {
+                    const dx = e.touches[0].pageX - tData.lastX;
+                    const dy = e.touches[0].pageY - tData.lastY;
+                    if(Math.abs(dx) > 3 || Math.abs(dy) > 3) tData.moved = true;
+                    
+                    transform.x += dx;
+                    transform.y += dy;
+                    tData.lastX = e.touches[0].pageX;
+                    tData.lastY = e.touches[0].pageY;
+                    applyTransform();
+                }
+            }, { passive: false });
+
+            viewport.addEventListener('touchend', (e) => {
+                tData.isDragging = false;
+                if (e.target.closest('.marker-pin')) return;
+                if(!tData.moved && e.changedTouches.length === 1) {
+                    handleMapTap(e.changedTouches[0]);
+                }
+            });
+        }
+
+        function applyTransform() {
+            const wrapper = document.getElementById('map-wrapper');
+            if(wrapper) {
+                wrapper.style.transform = `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`;
+                const pins = document.querySelectorAll('.marker-pin');
+                pins.forEach(pin => {
+                    pin.style.transform = `translate(-50%, -50%) scale(${1 / transform.scale})`;
+                });
+            }
+        }
+
+        function handleMapTap(touch) {
+            if(!state.activePlanId) return;
+            const viewport = document.getElementById('map-viewport');
+            const wrapper = document.getElementById('map-wrapper');
+            const img = wrapper.querySelector('img');
+            
+            if(!img || img.offsetHeight === 0) return;
+
+            const vRect = viewport.getBoundingClientRect();
+            const localX = (touch.clientX - vRect.left - transform.x) / transform.scale;
+            const localY = (touch.clientY - vRect.top - transform.y) / transform.scale;
+
+            const pctX = (localX / img.offsetWidth) * 100;
+            const pctY = (localY / img.offsetHeight) * 100;
+
+            if(pctX < 0 || pctX > 100 || pctY < 0 || pctY > 100) return;
+
+            const newPin = {
+                id: 'pin_' + Date.now(),
+                planId: state.activePlanId,
+                x: pctX,
+                y: pctY,
+                title: 'Nuova Ispezione',
+                desc: '',
+                level: 'medio',
+                photos: []
+            };
+
+            const projs = [...state.projects];
+            const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+            projs[pIdx].pins.push(newPin);
+            
+            state.projects = projs;
+            Storage.saveState(state);
+            
+            renderPins(projs[pIdx].pins.filter(p => p.planId === state.activePlanId));
+            window.openPinModal(newPin.id);
+        }
+
+        window.onMapImageLoad = () => {
+            const p = state.projects.find(x => x.id === state.activeProjId);
+            if(p) {
+                renderPins(p.pins.filter(pin => pin.planId === state.activePlanId));
+            }
+        };
+
+        /* ==========================================
+           4. AZIONI LOGICHE E GESTIONE PIN
+           ========================================== */
         
+        window.setLanguage = (l) => updateState({ lang: l });
+        
+        window.goHome = () => {
+            transform = { x: 20, y: 20, scale: 1 };
+            updateState({ view: 'home', activeProjId: null, activePlanId: null });
+        };
+
         window.createProject = () => {
-            const val = document.getElementById('newProjInput')?.value;
-            if(!val) return;
-            const p = { id: String(Date.now()), name: val, files: [], markers: [] };
-            updateState({ projects: [...state.projects, p], showModal: null });
+            const name = document.getElementById('projName').value;
+            if(!name) return;
+            const newP = { id: 'proj_' + Date.now(), name: name, plans: [], pins: [] };
+            updateState({ projects: [...state.projects, newP] });
+            window.closeModal();
         };
 
-        window.uploadFile = async (e) => {
+        window.openProject = (id) => {
+            const p = state.projects.find(x => x.id === id);
+            const firstPlan = p.plans.length > 0 ? p.plans[0].id : null;
+            transform = { x: 20, y: 20, scale: 1 };
+            updateState({ view: 'project', activeProjId: id, activePlanId: firstPlan });
+        };
+
+        window.uploadPlan = async (e) => {
             const file = e.target.files[0];
             if(!file) return;
-            const id = "f_" + Date.now();
-            const reader = new FileReader();
-            reader.onload = async (ev) => {
-                await storage.save(id, ev.target.result);
-                const projs = [...state.projects];
-                const p = projs.find(x => x.id === state.activeProjectId);
-                p.files.push({ id, name: file.name.split('.')[0], isPdf: file.type.includes('pdf') });
-                updateState({ projects: projs, activeFileId: id });
-            };
-            reader.readAsArrayBuffer(file);
-        };
-
-        window.renameFile = () => {
-            const val = document.getElementById('renameInput')?.value;
-            if(!val) return;
+            
+            const id = "plan_" + Date.now();
+            await Storage.saveFile(id, file);
+            
             const projs = [...state.projects];
-            const p = projs.find(x => x.id === state.activeProjectId);
-            const f = p.files.find(x => x.id === state.showModal.fileId);
-            f.name = val;
-            updateState({ projects: projs, showModal: null });
+            const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+            projs[pIdx].plans.push({ id: id, name: file.name.split('.')[0] });
+            
+            transform = { x: 20, y: 20, scale: 1 };
+            updateState({ projects: projs, activePlanId: id });
         };
 
-        window.addPin = (e) => {
-            if(!state.activeFileId) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            const x = ((e.clientX - rect.left) / rect.width) * 100;
-            const y = ((e.clientY - rect.top) / rect.height) * 100;
+        window.selectPlan = (id) => {
+            transform = { x: 20, y: 20, scale: 1 };
+            updateState({ activePlanId: id });
+        };
+
+        window.openPinModal = (pinId) => {
+            const p = state.projects.find(x => x.id === state.activeProjId);
+            const pin = p.pins.find(x => x.id === pinId);
+            const t = i18n[state.lang];
+
+            const html = `
+                <div class="p-6 bg-slate-900 text-white flex justify-between items-center shrink-0">
+                    <h3 class="font-black uppercase tracking-widest text-sm">Dettaglio Rilievo</h3>
+                    <button onclick="window.closeModal()" class="p-2 bg-white/10 rounded-full"><i data-lucide="x" class="w-5 h-5"></i></button>
+                </div>
+                <div class="p-6 space-y-5 overflow-y-auto hide-scroll text-black flex-1">
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${t.title}</label>
+                        <input id="pin-title" type="text" value="${pin.title.replace(/"/g, '&quot;')}" oninput="window.updatePinData('${pin.id}', 'title', this.value)" class="w-full text-xl font-black bg-slate-100 p-4 rounded-xl outline-none mt-1">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${t.desc}</label>
+                        <textarea id="pin-desc" oninput="window.updatePinData('${pin.id}', 'desc', this.value)" class="w-full h-24 bg-slate-100 p-4 rounded-xl outline-none mt-1 resize-none">${pin.desc}</textarea>
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Livello Criticità</label>
+                        <div class="flex gap-2">
+                            <button onclick="window.updatePinData('${pin.id}', 'level', 'alto'); window.openPinModal('${pin.id}')" class="flex-1 py-3 rounded-lg font-bold text-xs uppercase border-2 ${pin.level === 'alto' ? 'bg-red-500 text-white border-red-600' : 'bg-white border-slate-200 text-slate-400'}">${t.critAlto}</button>
+                            <button onclick="window.updatePinData('${pin.id}', 'level', 'medio'); window.openPinModal('${pin.id}')" class="flex-1 py-3 rounded-lg font-bold text-xs uppercase border-2 ${pin.level === 'medio' ? 'bg-yellow-500 text-white border-yellow-600' : 'bg-white border-slate-200 text-slate-400'}">${t.critMedio}</button>
+                            <button onclick="window.updatePinData('${pin.id}', 'level', 'basso'); window.openPinModal('${pin.id}')" class="flex-1 py-3 rounded-lg font-bold text-xs uppercase border-2 ${pin.level === 'basso' ? 'bg-blue-500 text-white border-blue-600' : 'bg-white border-slate-200 text-slate-400'}">${t.critBasso}</button>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4 pt-2">
+                        <label class="bg-slate-900 text-white p-4 rounded-2xl flex flex-col items-center gap-2 cursor-pointer active:scale-95">
+                            <i data-lucide="camera" class="w-6 h-6"></i><span class="text-[10px] font-black uppercase">${t.cam}</span>
+                            <input type="file" accept="image/*" capture="environment" class="hidden" onchange="window.addPhoto('${pin.id}', event)">
+                        </label>
+                        <label class="bg-slate-100 text-slate-600 p-4 rounded-2xl flex flex-col items-center gap-2 cursor-pointer active:scale-95">
+                            <i data-lucide="image" class="w-6 h-6"></i><span class="text-[10px] font-black uppercase">${t.gal}</span>
+                            <input type="file" accept="image/*" class="hidden" onchange="window.addPhoto('${pin.id}', event)">
+                        </label>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-2" id="pin-photos-grid"></div>
+
+                    <!-- TASTO ELIMINA PIN -->
+                    <button onclick="event.stopPropagation(); event.preventDefault(); window.confirmAction('delete-pin', '${pin.id}', 'Sicuro di voler eliminare questo punto?')" class="w-full py-4 text-red-500 font-black text-xs uppercase border-t mt-4 flex items-center justify-center gap-2">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i> ${t.delPin}
+                    </button>
+                </div>
+                
+                <div class="p-6 bg-white border-t border-slate-100 shrink-0">
+                    <button onclick="window.closeModal()" class="w-full bg-blue-600 text-white py-4 rounded-xl font-black uppercase shadow-lg active:scale-95 transition-transform">${t.save}</button>
+                </div>
+            `;
+            
+            document.getElementById('modal-body').innerHTML = html;
+            document.getElementById('modal').classList.add('active');
+            lucide.createIcons();
+            
+            window.loadPinPhotos(pin.id);
+        };
+
+        window.updatePinData = (pinId, field, value) => {
             const projs = [...state.projects];
-            const p = projs.find(x => x.id === state.activeProjectId);
-            p.markers.push({ id: String(Date.now()), fileId: state.activeFileId, x, y, status: 'yellow', title: 'Punto', notes: '', photos: [] });
-            updateState({ projects: projs });
+            const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+            const pinIdx = projs[pIdx].pins.findIndex(p => p.id === pinId);
+            projs[pIdx].pins[pinIdx][field] = value;
+            
+            state.projects = projs;
+            Storage.saveState(state);
+            
+            if(field === 'level') {
+                renderPins(projs[pIdx].pins.filter(p => p.planId === state.activePlanId));
+            }
         };
 
-        window.openMarker = async (mid) => {
-            const p = state.projects.find(x => x.id === state.activeProjectId);
-            const m = p.markers.find(x => x.id === mid);
-            const photos = await Promise.all(m.photos.map(async (pid) => {
-                const buf = await storage.get(pid);
-                return buf ? { id: pid, url: URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })) } : null;
-            }));
-            updateState({ showModal: { type: 'marker-detail', id: mid }, modalPhotos: photos.filter(x=>x) });
-        };
-
-        window.setMarkerStatus = (mid, s) => {
-            const projs = [...state.projects];
-            const m = projs.find(x => x.id === state.activeProjectId).markers.find(x => x.id === mid);
-            m.status = s;
-            updateState({ projects: projs });
-        };
-
-        window.setMarkerData = (mid, field, val) => {
-            const m = state.projects.find(x => x.id === state.activeProjectId).markers.find(x => x.id === mid);
-            m[field] = val;
-            localStorage.setItem('fixit_projs', JSON.stringify(state.projects));
-        };
-
-        window.addPhoto = async (mid, e) => {
-            const file = e.target.files[0];
+        window.addPhoto = async (pinId, event) => {
+            const file = event.target.files[0];
             if(!file) return;
-            const id = "img_" + Date.now();
-            const reader = new FileReader();
-            reader.onload = async (ev) => {
-                await storage.save(id, ev.target.result);
-                const projs = [...state.projects];
-                projs.find(x => x.id === state.activeProjectId).markers.find(x => x.id === mid).photos.push(id);
-                const url = URL.createObjectURL(new Blob([ev.target.result], { type: 'image/jpeg' }));
-                updateState({ projects: projs, modalPhotos: [...state.modalPhotos, { id, url }] });
-            };
-            reader.readAsArrayBuffer(file);
+            
+            const photoId = "photo_" + Date.now();
+            await Storage.saveFile(photoId, file);
+            
+            const projs = [...state.projects];
+            const pIdx = projs.findIndex(p => p.id === state.activeProjId);
+            const pinIdx = projs[pIdx].pins.findIndex(p => p.id === pinId);
+            
+            if(!projs[pIdx].pins[pinIdx].photos) projs[pIdx].pins[pinIdx].photos = [];
+            projs[pIdx].pins[pinIdx].photos.push(photoId);
+            
+            state.projects = projs;
+            await Storage.saveState(state);
+            
+            window.loadPinPhotos(pinId);
         };
 
-        // --- RENDER ---
+        window.loadPinPhotos = async (pinId) => {
+            const grid = document.getElementById('pin-photos-grid');
+            if(!grid) return;
+            
+            const p = state.projects.find(x => x.id === state.activeProjId);
+            const pin = p.pins.find(x => x.id === pinId);
+            
+            if(!pin.photos || pin.photos.length === 0) {
+                grid.innerHTML = '';
+                return;
+            }
+            
+            grid.innerHTML = `<div class="text-xs text-slate-400 col-span-3 text-center py-2">Caricamento media...</div>`;
+            
+            let html = '';
+            for(let photoId of pin.photos) {
+                let url = fileCache[photoId];
+                if(!url) {
+                    const blob = await Storage.getFile(photoId);
+                    if(blob) {
+                        url = URL.createObjectURL(blob);
+                        fileCache[photoId] = url;
+                    }
+                }
+                if(url) {
+                    html += `
+                        <div class="aspect-square rounded-xl overflow-hidden bg-slate-200 border border-slate-300 relative">
+                            <img src="${url}" class="w-full h-full object-cover">
+                            <button onclick="event.preventDefault(); event.stopPropagation(); window.confirmAction('delete-photo', {pinId: '${pinId}', photoId: '${photoId}'}, 'Eliminare questa foto?')" class="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 shadow-md active:scale-90">
+                                <i data-lucide="x" class="w-3 h-3"></i>
+                            </button>
+                        </div>
+                    `;
+                }
+            }
+            grid.innerHTML = html;
+            lucide.createIcons();
+        };
+
+        function renderPins(pinsArr) {
+            const wrapper = document.getElementById('map-wrapper');
+            if(!wrapper) return;
+            
+            wrapper.querySelectorAll('.marker-pin').forEach(e => e.remove());
+            
+            pinsArr.forEach((pin, index) => {
+                const el = document.createElement('div');
+                el.className = `marker-pin pin-${pin.level} pin`;
+                el.style.left = `${pin.x}%`;
+                el.style.top = `${pin.y}%`;
+                el.style.transform = `translate(-50%, -50%) scale(${1 / transform.scale})`;
+                el.innerText = index + 1;
+                el.setAttribute('data-id', pin.id);
+                
+                el.addEventListener('touchend', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if(!tData.moved) window.openPinModal(pin.id);
+                });
+                
+                wrapper.appendChild(el);
+            });
+        }
+
+        /* ==========================================
+           5. GENERAZIONE E CONDIVISIONE PDF (LAYOUT)
+           ========================================== */
+        
+        window.getSummaryPageHTML = (projectName, planName, planImageBase64, pins) => {
+            let pinsMarkersHTML = '';
+            let pinsListHTML = '';
+
+            pins.forEach((pin, index) => {
+                let color = "#22c55e"; // verde
+                let statusText = "RISOLTO";
+                if (pin.level === 'alto') { color = "#ef4444"; statusText = "CRITICO"; }
+                if (pin.level === 'medio') { color = "#eab308"; statusText = "PENDENTE"; }
+
+                pinsMarkersHTML += `
+                    <div style="position: absolute; left: ${pin.x}%; top: ${pin.y}%; transform: translate(-50%, -50%); width: 24px; height: 24px; background-color: ${color}; border-radius: 50%; border: 2px solid white; color: white; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.5);">
+                        ${index + 1}
+                    </div>
+                `;
+
+                pinsListHTML += `
+                    <tr style="border-bottom: 1px solid #ddd;">
+                        <td style="padding: 8px; font-weight: bold; text-align: center; width: 10%;">0${index + 1}</td>
+                        <td style="padding: 8px; font-weight: bold; width: 60%;">${pin.title}</td>
+                        <td style="padding: 8px; color: ${color}; font-weight: bold; text-align: right; width: 30%;">${statusText}</td>
+                    </tr>
+                `;
+            });
+
+            return `
+            <div class="pdf-page-render" style="width: 210mm; min-height: 297mm; padding: 15mm; background: white; color: black; box-sizing: border-box; font-family: sans-serif; position: relative;">
+                
+                <div style="display: flex; justify-content: space-between; border-bottom: 2px solid black; padding-bottom: 10px; margin-bottom: 20px;">
+                    <div>
+                        <h1 style="font-size: 28px; font-weight: 900; margin: 0; font-style: italic;">TRAM</h1>
+                        <p style="font-size: 8px; margin: 0; font-weight: bold; letter-spacing: 1px;">CONTROL GESTIÓ OBRES PROJECTES</p>
+                    </div>
+                    <div style="text-align: right; text-transform: uppercase;">
+                        <h2 style="font-size: 16px; font-weight: bold; margin: 0;">RIEPILOGO PIANO</h2>
+                    </div>
+                </div>
+
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 12px;">
+                    <tr><td style="font-weight: bold; width: 30%;">PROGETTO:</td><td>${projectName}</td></tr>
+                    <tr><td style="font-weight: bold;">PIANO:</td><td>${planName}</td></tr>
+                </table>
+
+                <div style="border: 2px solid black; padding: 5px; margin-bottom: 20px; background: #f8fafc;">
+                    <div style="position: relative; width: 100%; display: block;">
+                        <img src="${planImageBase64}" style="width: 100%; height: auto; display: block;">
+                        ${pinsMarkersHTML}
+                    </div>
+                </div>
+
+                <h3 style="font-size: 14px; font-weight: bold; border-bottom: 2px solid black; padding-bottom: 5px; margin-bottom: 10px;">ELENCO CRITICITÀ</h3>
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                    <tr style="background: black; color: white;">
+                        <td style="padding: 10px; text-align: center; font-weight: bold;">Nº</td>
+                        <td style="padding: 10px; font-weight: bold;">ELEMENTO</td>
+                        <td style="padding: 10px; text-align: right; font-weight: bold;">STATO</td>
+                    </tr>
+                    ${pinsListHTML}
+                </table>
+                
+                <div style="position: absolute; bottom: 15mm; left: 15mm; right: 15mm; font-size: 8px; font-weight: bold; border-top: 1px solid #ccc; padding-top: 10px; display: flex; justify-content: space-between;">
+                    <span>FixIT Report</span>
+                    <span>DATA: ${new Date().toLocaleDateString()}</span>
+                </div>
+            </div>
+            `;
+        };
+
+        window.getReportPageHTML = (projectName, pin, photosBase64, currentNumber) => {
+            
+            let statusColor = "#22c55e";
+            let statusText = "CORRECTE";
+            if (pin.level === 'alto') { statusColor = "#ef4444"; statusText = "CORREGIR (CRÍTIC)"; }
+            if (pin.level === 'medio') { statusColor = "#eab308"; statusText = "PENDENT"; }
+
+            let photosHTML = '';
+            photosBase64.forEach(imgData => {
+                photosHTML += `
+                    <div style="border: 1px solid #000; height: 180px; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                        <img src="${imgData}" style="width: 100%; height: 100%; object-fit: cover;">
+                    </div>
+                `;
+            });
+
+            return `
+            <div class="pdf-page-render" style="width: 210mm; min-height: 297mm; padding: 15mm; background: white; color: black; box-sizing: border-box; font-family: sans-serif; position: relative;">
+                
+                <div style="display: flex; justify-content: space-between; border-bottom: 2px solid black; padding-bottom: 10px; margin-bottom: 20px;">
+                    <div>
+                        <h1 style="font-size: 28px; font-weight: 900; margin: 0; font-style: italic;">TRAM</h1>
+                        <p style="font-size: 8px; margin: 0; font-weight: bold; letter-spacing: 1px;">CONTROL GESTIÓ OBRES PROJECTES</p>
+                    </div>
+                    <div style="text-align: right; text-transform: uppercase;">
+                        <h2 style="font-size: 16px; font-weight: bold; margin: 0;">INFORME REVISIÓ D'OBRA</h2>
+                    </div>
+                </div>
+
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px;">
+                    <tr>
+                        <td style="font-weight: bold; width: 30%;">PROJECTE:</td>
+                        <td>${projectName}</td>
+                    </tr>
+                    <tr>
+                        <td style="font-weight: bold;">DATA DE LA REVISIÓ:</td>
+                        <td>${new Date().toLocaleDateString()}</td>
+                    </tr>
+                </table>
+
+                <div style="border: 2px solid black; margin-bottom: 20px;">
+                    <div style="background: black; color: white; padding: 10px; display: flex; justify-content: space-between; font-weight: bold;">
+                        <span>INF. 0${currentNumber}</span>
+                        <span style="color: ${statusColor};">${statusText}</span>
+                    </div>
+                    
+                    <div style="display: flex; flex-direction: row; min-height: 400px;">
+                        <div style="width: 50%; padding: 15px; border-right: 2px solid black;">
+                            <p style="font-size: 10px; font-weight: bold; color: #666; margin-bottom: 5px;">ELEMENT REVISAT:</p>
+                            <p style="font-weight: bold; font-size: 16px; margin-bottom: 20px;">${pin.title}</p>
+                            
+                            <p style="font-size: 10px; font-weight: bold; color: #666; margin-bottom: 5px;">NOTES:</p>
+                            <p style="font-style: italic; font-size: 12px; line-height: 1.5;">➤ ${pin.desc || 'Cap descripció proporcionada.'}</p>
+                        </div>
+                        
+                        <div style="width: 50%; padding: 15px; background-color: #f8fafc;">
+                            <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+                                ${photosHTML}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="position: absolute; bottom: 15mm; left: 15mm; right: 15mm; font-size: 8px; font-weight: bold; border-top: 1px solid #ccc; padding-top: 10px; display: flex; justify-content: space-between;">
+                    <span>BARCELONA | C/ Provença 146</span>
+                    <span>FixIT Report</span>
+                </div>
+            </div>
+            `;
+        };
+
+        window.generateReport = async () => {
+            const p = state.projects.find(x => x.id === state.activeProjId);
+            if (!p || p.pins.length === 0) {
+                // Sostituiamo alert() con il nostro avviso personalizzato
+                window.showAlert("Non ci sono punti da esportare in questo progetto.");
+                return;
+            }
+
+            document.getElementById('pdf-loading').classList.remove('hidden');
+            document.getElementById('pdf-loading').classList.add('flex');
+
+            try {
+                const hiddenContainer = document.getElementById('pdf-hidden-container');
+                hiddenContainer.innerHTML = '';
+
+                for (let plan of p.plans) {
+                    const planPins = p.pins.filter(m => m.planId === plan.id);
+                    if (planPins.length > 0) {
+                        const planBlob = await Storage.getFile(plan.id);
+                        if (planBlob) {
+                            const planB64 = await new Promise(res => {
+                                const reader = new FileReader();
+                                reader.onloadend = () => res(reader.result);
+                                reader.readAsDataURL(planBlob);
+                            });
+                            hiddenContainer.innerHTML += window.getSummaryPageHTML(p.name, plan.name, planB64, planPins);
+                        }
+                    }
+                }
+
+                for (let i = 0; i < p.pins.length; i++) {
+                    const pin = p.pins[i];
+                    
+                    let base64Photos = [];
+                    if (pin.photos) {
+                        for (let photoId of pin.photos) {
+                            const blob = await Storage.getFile(photoId);
+                            if (blob) {
+                                const b64 = await new Promise(res => {
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => res(reader.result);
+                                    reader.readAsDataURL(blob);
+                                });
+                                base64Photos.push(b64);
+                            }
+                        }
+                    }
+                    
+                    hiddenContainer.innerHTML += window.getReportPageHTML(p.name, pin, base64Photos, i + 1);
+                }
+
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF('p', 'mm', 'a4');
+                const pages = hiddenContainer.querySelectorAll('.pdf-page-render');
+
+                for (let i = 0; i < pages.length; i++) {
+                    const canvas = await html2canvas(pages[i], { scale: 2, useCORS: true });
+                    if (i > 0) doc.addPage();
+                    doc.addImage(canvas.toDataURL('image/jpeg', 0.8), 'JPEG', 0, 0, 210, 297);
+                }
+
+                const pdfBlob = doc.output('blob');
+                const fileName = `Report_FixIT_${p.name.replace(/\s+/g, '_')}.pdf`;
+                
+                if (navigator.share && navigator.canShare) {
+                    const file = new File([pdfBlob], fileName, { type: "application/pdf" });
+                    await navigator.share({ files: [file], title: 'Report FixIT' });
+                } else {
+                    const url = URL.createObjectURL(pdfBlob);
+                    const a = document.createElement('a'); a.href = url; a.download = fileName;
+                    document.body.appendChild(a); a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url), 2000);
+                }
+
+            } catch (err) {
+                console.error(err);
+                // Sostituiamo alert() con il nostro avviso personalizzato
+                window.showAlert("Errore durante la generazione del PDF.");
+            } finally {
+                document.getElementById('pdf-loading').classList.add('hidden');
+                document.getElementById('pdf-loading').classList.remove('flex');
+                document.getElementById('pdf-hidden-container').innerHTML = '';
+            }
+        };
+
+        /* ==========================================
+           6. RENDER UI E MENU
+           ========================================== */
+        
+        window.openNewProjModal = () => {
+            const t = i18n[state.lang];
+            const html = `
+                <div class="p-8 text-black">
+                    <h3 class="text-xl font-black mb-6 uppercase">${t.newProj}</h3>
+                    <input id="projName" type="text" class="w-full bg-slate-100 p-5 rounded-2xl mb-8 font-bold outline-none border-2 border-transparent focus:border-blue-500" placeholder="Nome...">
+                    <div class="flex gap-4">
+                        <button onclick="window.closeModal()" class="flex-1 text-slate-400 font-bold uppercase text-xs">${t.cancel}</button>
+                        <button onclick="window.createProject()" class="flex-1 bg-blue-600 text-white py-4 rounded-xl font-black uppercase shadow-lg">${t.create}</button>
+                    </div>
+                </div>
+            `;
+            document.getElementById('modal-body').innerHTML = html;
+            document.getElementById('modal').classList.add('active');
+            setTimeout(() => document.getElementById('projName').focus(), 100);
+        };
+
+        window.closeModal = () => {
+            const m = document.getElementById('modal');
+            if(m) m.classList.remove('active');
+            setTimeout(() => { state.showModal = null; }, 300);
+        };
+
         async function render() {
             const root = document.getElementById('app');
             const t = i18n[state.lang];
 
-            if (state.view === 'report') {
-                root.innerHTML = await renderReport(t);
-            } else if (state.activeProjectId) {
-                root.innerHTML = await renderProject(t);
-            } else {
-                root.innerHTML = renderHome(t);
-            }
-            if (window.lucide) lucide.createIcons();
-        }
-
-        function renderHome(t) {
-            return `
-            <div id="app-ui" class="h-full flex flex-col">
-                <header class="bg-slate-900 text-white p-6 flex justify-between items-center shrink-0 pt-12 shadow-xl">
-                    <h1 class="text-3xl font-black italic tracking-tighter">FixIT</h1>
-                    <div class="flex gap-3">
-                        <select onchange="updateState({lang:this.value})" class="bg-white/10 text-[10px] font-black p-2 rounded-xl outline-none uppercase">
-                            ${['it','es','ca'].map(l => `<option value="${l}" ${state.lang===l?'selected':''}>${l}</option>`).join('')}
-                        </select>
-                        <button onclick="updateState({showModal:'new-project'})" class="bg-blue-600 p-2 rounded-xl active:scale-90 transition-transform"><i data-lucide="plus"></i></button>
+            if (state.view === 'home') {
+                root.innerHTML = `
+                    <header class="app-header">
+                        <h1 class="text-2xl font-black italic tracking-tighter">FixIT</h1>
+                        <div class="flex items-center gap-3">
+                            <select onchange="window.setLanguage(this.value)" class="bg-white/10 text-xs font-bold p-2 rounded-lg outline-none text-white uppercase appearance-none text-center">
+                                <option value="it" ${state.lang==='it'?'selected':''}>IT</option>
+                                <option value="es" ${state.lang==='es'?'selected':''}>ES</option>
+                                <option value="ca" ${state.lang==='ca'?'selected':''}>CA</option>
+                            </select>
+                            <button onclick="window.openNewProjModal()" class="bg-blue-600 p-2 rounded-lg"><i data-lucide="plus"></i></button>
+                        </div>
+                    </header>
+                    <div class="flex-1 p-5 space-y-4 overflow-y-auto">
+                        ${state.projects.length === 0 ? `<div class="h-full flex items-center justify-center text-slate-400 font-bold text-xs uppercase tracking-widest">${t.noProj}</div>` : ''}
+                        ${state.projects.map(p => `
+                            <div class="bg-white p-6 rounded-[24px] shadow-sm flex justify-between items-center cursor-pointer" onclick="window.openProject('${p.id}')">
+                                <div>
+                                    <h3 class="font-black text-slate-800 uppercase tracking-tight text-lg">${p.name}</h3>
+                                    <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">${p.plans.length} ${t.plan} • ${p.pins.length} PINS</p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <!-- TASTO RINOMINA PROGETTO AGGIUNTO -->
+                                    <button onclick="event.stopPropagation(); event.preventDefault(); window.promptAction('rename-project', '${p.id}', 'Rinomina Cantiere', '${p.name.replace(/'/g, "\\'")}')" class="p-3 bg-blue-50 text-blue-500 rounded-full active:scale-90"><i data-lucide="pencil" class="w-5 h-5"></i></button>
+                                    <button onclick="event.stopPropagation(); event.preventDefault(); window.confirmAction('delete-project', '${p.id}', 'Sicuro di voler eliminare questo cantiere e tutti i dati al suo interno?')" class="p-3 bg-red-50 text-red-500 rounded-full active:scale-90"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                                    <div class="bg-slate-50 p-3 rounded-full"><i data-lucide="chevron-right" class="text-slate-400 w-5 h-5"></i></div>
+                                </div>
+                            </div>
+                        `).join('')}
                     </div>
-                </header>
-                <div class="flex-1 p-6 space-y-4 overflow-y-auto scrollbar-hide">
-                    ${state.projects.map(p => `
-                        <div onclick="window.openProject('${p.id}')" class="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm flex justify-between items-center active:scale-95 transition-all">
-                            <div><h3 class="font-black text-lg uppercase">${p.name}</h3><p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${p.files.length} ${t.docs} • ${p.markers.length} PINS</p></div>
-                            <i data-lucide="chevron-right" class="text-slate-300"></i>
-                        </div>`).join('')}
-                </div>
-            </div>
-            ${state.showModal === 'new-project' ? `
-                <div class="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
-                    <div class="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl">
-                        <h3 class="text-2xl font-black mb-6 uppercase tracking-tight">FixIT</h3>
-                        <input id="newProjInput" type="text" class="w-full bg-slate-50 p-5 rounded-3xl mb-8 font-bold outline-none" placeholder="Nome...">
-                        <div class="flex gap-4">
-                            <button onclick="updateState({showModal:null})" class="flex-1 text-slate-400 font-bold uppercase text-xs">${t.cancel}</button>
-                            <button onclick="window.createProject()" class="flex-1 bg-blue-600 text-white py-4 rounded-3xl font-black uppercase text-xs">${t.create}</button>
+                `;
+            }
+            else if (state.view === 'project') {
+                const p = state.projects.find(x => x.id === state.activeProjId);
+                const activePlan = p.plans.find(x => x.id === state.activePlanId);
+                
+                let mapHTML = `<div class="w-full h-full flex flex-col items-center justify-center text-slate-400 font-bold uppercase text-xs tracking-widest"><i data-lucide="map" class="w-12 h-12 mb-4 opacity-20"></i>${t.mapNoData}</div>`;
+                
+                if (activePlan) {
+                    if (!fileCache[activePlan.id]) {
+                        const blob = await Storage.getFile(activePlan.id);
+                        if(blob) fileCache[activePlan.id] = URL.createObjectURL(blob);
+                    }
+                    
+                    if (fileCache[activePlan.id]) {
+                        mapHTML = `
+                            <div id="map-wrapper" class="map-wrapper">
+                                <img src="${fileCache[activePlan.id]}" class="map-image" alt="Planimetria" onload="window.onMapImageLoad()">
+                            </div>
+                        `;
+                    }
+                }
+
+                root.innerHTML = `
+                    <header class="app-header">
+                        <button onclick="window.goHome()" class="p-2 bg-white/10 rounded-lg"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
+                        <div class="font-black text-sm uppercase tracking-tight truncate px-2">${p.name}</div>
+                        <button onclick="window.generateReport()" class="bg-blue-600 px-3 py-2 rounded-lg text-[10px] font-black uppercase flex items-center gap-1"><i data-lucide="share" class="w-3 h-3"></i> PDF</button>
+                    </header>
+                    
+                    <nav class="bg-white border-b flex items-center p-3 gap-2 overflow-x-auto hide-scroll shrink-0">
+                        <label class="bg-slate-100 p-3 rounded-xl text-blue-600 cursor-pointer active:scale-95 shrink-0">
+                            <i data-lucide="plus" class="w-4 h-4"></i>
+                            <input type="file" accept="image/*, application/pdf" class="hidden" onchange="window.uploadPlan(event)">
+                        </label>
+                        ${p.plans.map(plan => `
+                            <div class="flex items-center bg-slate-100 rounded-xl overflow-hidden ${state.activePlanId === plan.id ? 'tab-active shadow-md' : 'text-slate-500'}">
+                                <button onclick="window.selectPlan('${plan.id}')" class="px-4 py-3 text-[10px] font-black uppercase whitespace-nowrap transition-colors">
+                                    ${plan.name}
+                                </button>
+                                <!-- TASTO RINOMINA PIANO AGGIUNTO -->
+                                <button onclick="event.stopPropagation(); event.preventDefault(); window.promptAction('rename-plan', '${plan.id}', 'Rinomina Planimetria', '${plan.name.replace(/'/g, "\\'")}')" class="p-3 text-blue-400 bg-black/10 hover:bg-blue-500 hover:text-white transition-colors border-l border-white/10">
+                                    <i data-lucide="pencil" class="w-3 h-3"></i>
+                                </button>
+                                <button onclick="event.stopPropagation(); event.preventDefault(); window.confirmAction('delete-plan', '${plan.id}', 'Eliminare questa planimetria e tutti i pin collegati?')" class="p-3 text-red-400 bg-black/10 hover:bg-red-500 hover:text-white transition-colors border-l border-white/10">
+                                    <i data-lucide="trash-2" class="w-3 h-3"></i>
+                                </button>
+                            </div>
+                        `).join('')}
+                    </nav>
+
+                    <div class="map-container">
+                        <div id="map-viewport" class="map-viewport">
+                            ${mapHTML}
                         </div>
                     </div>
-                </div>` : ''}`;
-        }
+                `;
 
-        async function renderProject(t) {
-            const p = state.projects.find(x => x.id === state.activeProjectId);
-            const activeFile = p?.files.find(f => f.id === state.activeFileId);
-            let display = `<div class="text-slate-300 text-center font-black uppercase text-[10px] tracking-widest flex flex-col items-center justify-center h-64"><i data-lucide="file-text" class="w-16 h-16 mb-4 opacity-10"></i>${t.noDocs}</div>`;
-
-            if (activeFile) {
-                const buf = await storage.get(activeFile.id);
-                if (buf) {
-                    const url = URL.createObjectURL(new Blob([buf], { type: activeFile.isPdf ? 'application/pdf' : 'image/jpeg' }));
-                    display = `<div class="map-container" style="width:800px; height:${activeFile.isPdf?'1131px':'auto'};">
-                        ${activeFile.isPdf ? `<iframe src="${url}#toolbar=0&navpanes=0"></iframe>` : `<img src="${url}" class="w-full h-auto">`}
-                        <div class="absolute inset-0 z-10" onclick="window.addPin(event)"></div>
-                        ${p.markers.filter(m => m.fileId === state.activeFileId).map(m => `
-                            <div onclick="event.stopPropagation(); window.openMarker('${m.id}')" 
-                                 class="marker-pin absolute ${m.status==='red'?'bg-red-500':m.status==='green'?'bg-green-500':'bg-yellow-500'}"
-                                 style="left:${m.x}%; top:${m.y}%; width:${10/state.zoom}px; height:${10/state.zoom}px;">
-                            </div>`).join('')}
-                    </div>`;
+                if(activePlan && fileCache[activePlan.id]) {
+                    setTimeout(() => {
+                        initMapTouch();
+                        applyTransform();
+                    }, 50);
                 }
             }
-
-            return `
-            <div id="app-ui" class="h-full flex flex-col">
-                <header class="bg-slate-900 text-white p-4 flex justify-between items-center shrink-0 z-50 shadow-lg pt-10">
-                    <button onclick="updateState({activeProjectId:null, activeFileId:null, zoom:1})" class="p-2 active:bg-white/10 rounded-xl"><i data-lucide="chevron-left"></i></button>
-                    <span class="font-black text-xs uppercase truncate max-w-[150px] tracking-tighter">${p?.name}</span>
-                    <button onclick="updateState({view:'report'})" class="bg-blue-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg active:scale-95 transition-all">${t.report}</button>
-                </header>
-                <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-                    <aside class="w-full md:w-64 bg-white border-r flex flex-col shrink-0 overflow-hidden">
-                        <div class="p-4 border-b flex justify-between items-center bg-slate-50">
-                            <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">${t.docs}</span>
-                            <label class="text-blue-600 p-1 cursor-pointer"><i data-lucide="plus"></i><input type="file" class="hidden" onchange="window.uploadFile(event)"></label>
-                        </div>
-                        <div class="flex md:flex-col overflow-x-auto md:overflow-y-auto scrollbar-hide pb-10">
-                            ${p?.files.map(f => `
-                                <div class="flex items-center border-b ${state.activeFileId === f.id ? 'bg-blue-50 border-r-4 border-blue-600' : ''}">
-                                    <div onclick="updateState({activeFileId:'${f.id}', zoom:1})" class="flex-1 p-4 flex items-center gap-3 cursor-pointer overflow-hidden text-xs">
-                                        <i data-lucide="file-text" class="w-4 h-4 shrink-0"></i>
-                                        <span class="font-bold uppercase truncate">${f.name}</span>
-                                    </div>
-                                    <button onclick="updateState({showModal:{type:'rename', fileId:'${f.id}', name:'${f.name}'}})" class="p-4 text-slate-300 hover:text-blue-600"><i data-lucide="edit-2" class="w-3 h-3"></i></button>
-                                </div>`).join('')}
-                        </div>
-                    </aside>
-                    <section class="flex-1 relative bg-slate-200 overflow-hidden">
-                        <div class="absolute top-4 right-4 z-[70] flex flex-col gap-2">
-                            <button onclick="updateState({zoom:state.zoom+0.5})" class="bg-white p-3 rounded-2xl shadow-xl active:scale-90"><i data-lucide="zoom-in"></i></button>
-                            <button onclick="updateState({zoom:Math.max(1, state.zoom-0.5)})" class="bg-white p-3 rounded-2xl shadow-xl active:scale-90"><i data-lucide="zoom-out"></i></button>
-                        </div>
-                        <div class="map-viewport scrollbar-hide">
-                            <div style="transform: scale(${state.zoom})">
-                                ${display}
-                            </div>
-                        </div>
-                    </section>
-                </div>
-            </div>
-            ${renderModals(t)}`;
-        }
-
-        async function renderReport(t) {
-            const p = state.projects.find(x => x.id === state.activeProjectId);
-            let content = "";
-            for (const [idx, m] of p.markers.entries()) {
-                const fName = p.files.find(f => f.id === m.fileId)?.name || "Visual";
-                const photos = await Promise.all(m.photos.map(async pid => {
-                    const buf = await storage.get(pid);
-                    return buf ? `<img src="${URL.createObjectURL(new Blob([buf], {type:'image/jpeg'}))}" style="width:100%; border:1px solid black; margin-bottom:5px;">` : '';
-                }));
-                content += `
-                <div style="border:1px solid black; padding:15px; margin-bottom:30px; page-break-inside:avoid; background:white; box-shadow:4px 4px 0px black;">
-                    <div style="display:flex; justify-content:space-between; background:black; color:white; padding:8px; margin-bottom:15px;">
-                        <span style="font-weight:900; font-size:12px;">INF. 0${idx+1}</span>
-                        <span style="background:white; color:black; padding:2px 8px; font-size:10px; font-weight:900; border-radius:3px; text-transform:uppercase;">${m.status==='red'?t.crit:m.status==='green'?t.ok:t.pend}</span>
-                    </div>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; font-size:11px;">
-                        <div>
-                            <p style="font-size:8px; font-weight:900; color:#666; text-transform:uppercase;">${t.element}</p>
-                            <p style="font-weight:700; border-bottom:1px solid #ddd; padding-bottom:5px; margin-bottom:15px;">${m.title.toUpperCase()}</p>
-                            <p style="font-size:8px; font-weight:900; color:#666; text-transform:uppercase;">${t.loc}</p>
-                            <p style="font-style:italic; margin-bottom:15px;">${fName}</p>
-                            <p style="font-size:8px; font-weight:900; color:#666; text-transform:uppercase;">NOTE</p>
-                            <p style="background:#f9f9f9; padding:10px; border:1px solid #eee; font-style:italic;">${m.notes || '...'}</p>
-                        </div>
-                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">${photos.join('')}</div>
-                    </div>
-                </div>`;
-            }
-
-            return `
-            <div class="h-full flex flex-col bg-slate-800 overflow-y-auto pt-10 no-print">
-                <header class="bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                    <button onclick="updateState({view:'app'})" class="font-bold text-sm uppercase tracking-widest flex items-center gap-2"><i data-lucide="chevron-left"></i> CHIUDI</button>
-                    <button onclick="window.print()" class="bg-white text-black px-6 py-2 rounded-full font-black text-xs uppercase shadow-xl"><i data-lucide="printer" class="inline w-4 mr-1"></i> SALVA PDF</button>
-                </header>
-                <div class="p-6 md:p-10 max-w-4xl mx-auto w-full">
-                    <div class="bg-white p-10 md:p-16 min-h-[29.7cm] shadow-2xl text-black">
-                        <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:8px solid black; padding-bottom:10px; margin-bottom:40px;">
-                            <div><h1 style="font-size:48px; font-weight:900; font-style:italic; margin:0; line-height:1;">TRAM</h1><p style="font-size:7px; font-weight:900; letter-spacing:3px; text-transform:uppercase; margin-top:5px;">CONTROL • GESTIÓ • OBRES • PROJECTES</p></div>
-                            <div style="text-align:right; text-transform:uppercase; font-size:9px; font-weight:700;"><h2 style="font-size:20px; font-weight:900; margin:0;">${t.repTitle}</h2><p>${t.proj}: ${p.name}</p><p>${t.date}: ${new Date().toLocaleDateString()}</p></div>
-                        </div>
-                        ${content}
-                    </div>
-                </div>
-            </div>
-            <div id="report-print-view" class="hidden">
-                <div style="padding:40px;">
-                    <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:8px solid black; padding-bottom:10px; margin-bottom:40px;">
-                        <div><h1 style="font-size:48px; font-weight:900; font-style:italic; margin:0;">TRAM</h1><p style="font-size:7px; font-weight:900; letter-spacing:3px; text-transform:uppercase; margin-top:5px;">CONTROL • GESTIÓ • OBRES • PROJECTES</p></div>
-                        <div style="text-align:right; text-transform:uppercase; font-size:9px; font-weight:700;"><h2 style="font-size:20px; font-weight:900; margin:0;">${t.repTitle}</h2><p>${t.proj}: ${p.name}</p><p>${t.date}: ${new Date().toLocaleDateString()}</p></div>
-                    </div>
-                    ${content}
-                </div>
-            </div>`;
-        }
-
-        function renderModals(t) {
-            if(!state.showModal) return '';
             
-            if(state.showModal.type === 'rename') {
-                return `
-                <div class="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-6 backdrop-blur-md">
-                    <div class="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl">
-                        <h3 class="text-xl font-black mb-6 uppercase tracking-tight">${t.rename}</h3>
-                        <input id="renameInput" type="text" class="w-full bg-slate-50 p-5 rounded-3xl mb-8 font-bold outline-none border-2 border-blue-100" value="${state.showModal.name}">
-                        <div class="flex gap-4">
-                            <button onclick="updateState({showModal:null})" class="flex-1 text-slate-400 font-bold uppercase text-xs">${t.cancel}</button>
-                            <button onclick="window.renameFile()" class="flex-1 bg-slate-900 text-white py-4 rounded-3xl font-black uppercase text-xs active:scale-95 transition-all">${t.save}</button>
-                        </div>
-                    </div>
-                </div>`;
-            }
-
-            if(state.showModal.type === 'marker-detail') {
-                const proj = state.projects.find(x=>x.id===state.activeProjectId);
-                const m = proj.markers.find(x=>x.id===state.showModal.id);
-                return `
-                <div class="fixed inset-0 bg-black/80 z-[200] flex items-end md:items-center justify-center p-0 md:p-6 backdrop-blur-sm">
-                    <div class="bg-white w-full max-w-xl rounded-t-[40px] md:rounded-[40px] overflow-hidden flex flex-col max-h-[92vh] shadow-2xl">
-                        <div class="p-6 bg-slate-900 text-white flex justify-between items-center shrink-0">
-                            <h3 class="font-black uppercase tracking-tight italic">FixIT - ${t.details}</h3>
-                            <button onclick="updateState({showModal:null, modalPhotos:[]})" class="p-2 bg-white/10 rounded-full active:scale-90 transition-all"><i data-lucide="x"></i></button>
-                        </div>
-                        <div class="p-8 overflow-y-auto space-y-8 scrollbar-hide pb-32">
-                            <input oninput="window.setMarkerData('${m.id}', 'title', this.value)" type="text" value="${m.title}" class="w-full text-xl font-black bg-slate-50 p-5 rounded-3xl outline-none" placeholder="${t.title}">
-                            <textarea oninput="window.setMarkerData('${m.id}', 'notes', this.value)" class="w-full min-h-[100px] bg-slate-50 p-5 rounded-3xl outline-none font-medium" placeholder="${t.notes}">${m.notes}</textarea>
-                            <div class="flex gap-2">
-                                <button onclick="window.setMarkerStatus('${m.id}', 'red')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='red'?'bg-red-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.crit}</button>
-                                <button onclick="window.setMarkerStatus('${m.id}', 'yellow')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='yellow'?'bg-yellow-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.pend}</button>
-                                <button onclick="window.setMarkerStatus('${m.id}', 'green')" class="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase border-4 transition-all ${m.status==='green'?'bg-green-500 text-white border-slate-900 shadow-lg':'bg-slate-50 text-slate-300 border-transparent'}">${t.ok}</button>
-                            </div>
-                            <div class="grid grid-cols-2 gap-4">
-                                <label class="bg-slate-900 text-white p-6 rounded-[32px] flex flex-col items-center gap-2 cursor-pointer active:scale-95 shadow-xl"><i data-lucide="camera" class="w-8 h-8"></i><span class="text-[10px] font-black uppercase tracking-widest">${t.cam}</span><input type="file" capture="environment" class="hidden" onchange="window.addPhoto('${m.id}', event)"></label>
-                                <label class="bg-white border-4 border-slate-100 p-6 rounded-[32px] flex flex-col items-center gap-2 cursor-pointer active:scale-95 shadow-sm"><i data-lucide="image" class="w-8 h-8 text-slate-300"></i><span class="text-[10px] font-black uppercase text-slate-300 tracking-widest">${t.gal}</span><input type="file" class="hidden" onchange="window.addPhoto('${m.id}', event)"></label>
-                            </div>
-                            <div class="grid grid-cols-3 gap-3">
-                                ${state.modalPhotos.map(p => `<div class="aspect-square rounded-2xl overflow-hidden border border-slate-100 shadow-sm relative group"><img src="${p.url}" class="w-full h-full object-cover"></div>`).join('')}
-                            </div>
-                            <button onclick="if(confirm('Eliminare?')){ const projs=[...state.projects]; const pr=projs.find(x=>x.id==='${state.activeProjectId}'); pr.markers=pr.markers.filter(x=>x.id!=='${m.id}'); updateState({projects:projs, showModal:null}); }" class="w-full py-4 text-red-500 font-black text-[10px] uppercase tracking-widest">${t.del}</button>
-                        </div>
-                        <div class="p-4 bg-white/80 backdrop-blur-md border-t absolute bottom-0 w-full left-0 safe-bottom">
-                            <button onclick="updateState({showModal:null, modalPhotos:[]})" class="w-full bg-slate-900 text-white py-5 rounded-[28px] font-black uppercase text-xs active:scale-95 shadow-xl transition-all">${t.save}</button>
-                        </div>
-                    </div>
-                </div>`;
-            }
-            return '';
+            lucide.createIcons();
         }
 
-        window.onload = async () => { await initDB(); await render(); };
+        /* ==========================================
+           7. AVVIO APPLICAZIONE CON DELAY
+           ========================================== */
+        window.onload = () => {
+            setTimeout(async () => {
+                try {
+                    await initDB();
+                    const savedState = await Storage.getState();
+                    if (savedState) state = savedState;
+                    state.view = 'home';
+                    render();
+                } catch (error) {
+                    console.error("Inizializzazione fallita:", error);
+                    document.getElementById('app').innerHTML = `<div class="p-10 text-white text-center">Errore di sistema.</div>`;
+                }
+            }, 300);
+        };
+
     </script>
 </body>
 </html>
-
